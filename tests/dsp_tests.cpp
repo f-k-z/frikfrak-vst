@@ -8,6 +8,7 @@
 #include "dsp/BeatClock.h"
 #include "dsp/Pads.h"
 #include "dsp/TimeFx.h"
+#include "dsp/ColorFx.h"
 #include "Presets.h"
 #include "../plugins/kankyo/src/Presets.h"
 #include <set>
@@ -628,6 +629,70 @@ static void testGlitchTime() {
     }
 }
 
+// ---------- Glitch: colour effects ----------
+
+template <class F>
+static Buf runPlain(const Buf& in, F fx) { Buf out(in.size()); for (size_t i = 0; i < in.size(); ++i) { float l = in[i], r = in[i]; fx(l, r, i); out[i] = l; } return out; }
+
+static void testGlitchColor() {
+    const double sr = 48000;
+    {   // Pitch: +12 -> 880 Hz, -12 -> 220 Hz, 0 -> bit-exact with the pad engaged
+        const Buf in = sine(sr, 440, 1.0, 0.5f);
+        for (auto [semis, want] : { std::pair { 12.0f, 880.0 }, std::pair { -12.0f, 220.0 } }) {
+            dsp::PitchShift p; p.prepare(sr);
+            const Buf out = runPlain(in, [&](float& l, float& r, size_t) { p.process(l, r, true, semis); });
+            const double f = peakFreq(out, (size_t) (0.2 * sr), (size_t) (0.6 * sr), sr, want);
+            CHECK(std::fabs(f - want) < want * 0.02, "pitch %+.0f st -> %.1f Hz", semis, f);
+        }
+        dsp::PitchShift p; p.prepare(sr);
+        const Buf out = runPlain(in, [&](float& l, float& r, size_t) { p.process(l, r, true, 0.0f); });
+        CHECK(out == in, "pitch 0 not bit-exact");
+    }
+    {   // Crush: 4 bits -> at most 16 levels per polarity; 4 kHz -> steps of 12 samples at 48 kHz
+        dsp::Crush c; c.prepare(sr);
+        const Buf in = sine(sr, 97, 0.5, 0.9f);
+        const Buf out = runPlain(in, [&](float& l, float& r, size_t) { c.process(l, r, true, 4.0f, 48.0f); });
+        std::set<float> pos, neg;
+        for (size_t i = 1000; i < out.size(); ++i) (out[i] >= 0 ? pos : neg).insert(out[i]);
+        CHECK(pos.size() <= 16 && neg.size() <= 16, "crush levels %zu / %zu", pos.size(), neg.size());
+        dsp::Crush d; d.prepare(sr);
+        const Buf held = runPlain(in, [&](float& l, float& r, size_t) { d.process(l, r, true, 16.0f, 4.0f); });
+        int changes = 0; for (size_t i = 1001; i < 1001 + 1200; ++i) if (held[i] != held[i - 1]) ++changes;
+        CHECK(changes >= 99 && changes <= 101, "crush 4 kHz: %d value changes in 1200 samples", changes);
+    }
+    {   // Filter: -100 % low-pass, +100 % high-pass, 0 = bit-exact
+        const Buf lo = sine(sr, 100, 1.0, 0.5f), hi = sine(sr, 5000, 1.0, 0.5f);
+        auto through = [&](const Buf& in, float freq) { dsp::DjFilter f; f.prepare(sr); return runPlain(in, [&](float& l, float& r, size_t) { f.process(l, r, true, freq); }); };
+        auto db = [&](const Buf& out, const Buf& in) { return 20 * std::log10(rms(out, 24000, 24000) / rms(in, 24000, 24000)); };
+        CHECK(db(through(hi, -1.0f), hi) < -20 && db(through(lo, -1.0f), lo) > -3, "low-pass: 5 kHz %.1f dB, 100 Hz %.1f dB", db(through(hi, -1.0f), hi), db(through(lo, -1.0f), lo));
+        CHECK(db(through(lo, 1.0f), lo) < -20 && db(through(hi, 1.0f), hi) > -3, "high-pass: 100 Hz %.1f dB, 5 kHz %.1f dB", db(through(lo, 1.0f), lo), db(through(hi, 1.0f), hi));
+        CHECK(through(hi, 0.0f) == hi, "filter at 0 not bit-exact");
+    }
+    {   // Gate 1/16, depth 100 %: closed half-steps silent (within the ramps), no clicks
+        dsp::Gate g; g.prepare(sr);
+        const Buf in = sine(sr, 220, 1.0, 0.5f);
+        const Buf out = runClocked(sr, 120, true, in, [&](float& l, float& r, auto&, double ppq, size_t) { g.process(l, r, true, 0.25, 1.0f, ppq); });
+        const double open = rms(out, 6000 + 1500, 1000), closed = rms(out, 6000 + 3000 + 2000, 1000);  // a 1/16 = 6000 samples, closed from 3000
+        CHECK(closed < 0.02 * open, "gate closed %.4f vs open %.4f", closed, open);
+        CHECK(maxStep(out, 0, out.size()) <= 1.25 * maxStep(in, 0, 2000), "gate click %.3f", maxStep(out, 0, out.size()));
+    }
+    {   // Phaser: old call = new call at 0.5 Hz; 4 Hz speed -> envelope periodic over 0.25 s
+        dsp::Phaser a, b; a.prepare(sr, 0.7f); b.prepare(sr, 0.7f);
+        const Buf in = noise((size_t) sr, 11);
+        bool same = true;
+        for (float x : in) { float l1 = x, r1 = x, l2 = x, r2 = x; a.process(l1, r1, 0.7f); b.process(l2, r2, 0.7f, 0.5f); same = same && l1 == l2 && r1 == r2; }
+        CHECK(same, "phaser overload changed the existing behaviour");
+        dsp::GlitchPhaser gp; gp.prepare(sr);
+        const Buf saw = [&] { Buf x((size_t) (3 * sr)); for (size_t i = 0; i < x.size(); ++i) x[i] = 0.5f * (float) (std::fmod((double) i * 110 / sr, 1.0) * 2 - 1); return x; }();
+        const Buf out = runPlain(saw, [&](float& l, float& r, size_t) { gp.process(l, r, true, 4.0f); });
+        std::vector<double> env; for (size_t w = 4800; w + 480 <= out.size(); w += 480) env.push_back(rms(out, w, 480));  // 10 ms windows
+        auto corr = [&](size_t lag) { double m = 0; for (double v : env) m += v; m /= (double) env.size(); double num = 0, den = 0;
+            for (size_t i = 0; i + lag < env.size(); ++i) num += (env[i] - m) * (env[i + lag] - m);
+            for (double v : env) den += (v - m) * (v - m); return num / den; };
+        CHECK(corr(25) > corr(12) + 0.2, "phaser 4 Hz: corr(0.25 s) %.2f vs corr(0.12 s) %.2f", corr(25), corr(12));
+    }
+}
+
 int main() {
     testTine();
     testEffects();
@@ -638,6 +703,7 @@ int main() {
     testPresets();
     testGlitchBasics();
     testGlitchTime();
+    testGlitchColor();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all DSP tests passed\n");
     return 0;

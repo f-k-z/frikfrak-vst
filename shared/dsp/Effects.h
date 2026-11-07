@@ -81,9 +81,10 @@ struct Phaser {
         sr = sampleRate; phase = 0.0f; amountS.prepare(sr, initial);
         for (int c = 0; c < 2; ++c) for (int k = 0; k < 4; ++k) x1[c][k] = y1[c][k] = 0.0f;
     }
-    void process(float& l, float& r, float amount) {
+    void process(float& l, float& r, float amount) { process(l, r, amount, kRateHz); }
+    void process(float& l, float& r, float amount, float rateHz) {  // rateHz: Glitch's speed knob
         const float m = amountS.next(amount);
-        phase += kTwoPi * kRateHz / (float) sr;
+        phase += kTwoPi * rateHz / (float) sr;
         if (phase >= kTwoPi) phase -= kTwoPi;
         if (m < 1e-5f) return;  // bypass
         float* ch[2] = { &l, &r };
