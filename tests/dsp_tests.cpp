@@ -4,6 +4,9 @@
 #include "dsp/Vinyl.h"
 #include "dsp/Space.h"
 #include "dsp/Pad.h"
+#include "dsp/Engage.h"
+#include "dsp/BeatClock.h"
+#include "dsp/Pads.h"
 #include "Presets.h"
 #include "../plugins/kankyo/src/Presets.h"
 #include <set>
@@ -441,6 +444,80 @@ static void testPresets() {
     }
 }
 
+// ---------- Glitch: clock, pads, engage, history ----------
+
+static void testGlitchBasics() {
+    const double sr = 48000;
+    {   // Grid: 120 BPM, ppq 0 -> next 1/16 boundary at 6000 samples; all 1/32 boundaries in a block found
+        dsp::BeatClock c; c.prepare(sr); c.begin(4096, true, 120, true, 0.0, true);
+        int first = -1, n32 = 0;
+        for (int i = 1; i < 4096; ++i) {
+            if (std::floor(c.ppqAt(i) / 0.125) > std::floor(c.ppqAt(i - 1) / 0.125)) ++n32;
+        }
+        c.begin(8192, true, 120, true, 0.0, true);
+        for (int i = 1; i < 8192 && first < 0; ++i) if (std::floor(c.ppqAt(i) / 0.25) > std::floor(c.ppqAt(i - 1) / 0.25)) first = i;
+        CHECK(first == 6000, "1/16 boundary at %d", first);
+        CHECK(n32 == 1, "1/32 boundaries in 4096 samples = %d", n32);  // 1/32 = 3000 samples
+    }
+    {   // Stopped transport: free-runs at the last BPM, 120 if none; resync and loop detection
+        dsp::BeatClock c; c.prepare(sr);
+        c.begin(480, false, 0, false, 0, false);
+        CHECK(std::fabs(c.tempo() - 120) < 1e-9, "default bpm %.1f", c.tempo());
+        c.begin(480, true, 140, false, 0, false);
+        const double a = c.ppqAt(0);
+        c.begin(480, true, 140, false, 0, false);
+        CHECK(std::fabs((c.ppqAt(0) - a) - 480 * 140 / (60 * sr)) < 1e-9, "free-run at 140 BPM");
+        c.begin(512, true, 140, true, 8.0, true);
+        CHECK(std::fabs(c.ppqAt(0) - 8.0) < 1e-12, "resync on play");
+        c.begin(512, true, 140, true, 8.0 + 512 * 140 / (60 * sr), true);
+        CHECK(!c.jumpedThisBlock(), "steady playback flagged as jump");
+        c.begin(512, true, 141, true, 8.0 + 2 * 512 * 140 / (60 * sr), true);
+        CHECK(!c.jumpedThisBlock(), "tempo change flagged as jump");
+        c.begin(512, true, 141, true, 0.0, true);
+        CHECK(c.jumpedThisBlock(), "loop back to 0 not detected");
+        CHECK(std::fabs(c.lengthSamples(1.0) - 20425.5) < 1, "length at 141 BPM %.1f", c.lengthSamples(1.0));
+        c.begin(512, true, 20, true, 0.0, true);
+        CHECK(std::fabs(c.lengthSamples(1.0) - sr) < 1e-6, "length floored at 60 BPM");
+    }
+    {   // Pads state machine
+        dsp::Pads p; p.reset();
+        p.setParam(0, true); p.update(); CHECK(p.active(0), "pressed not active");
+        p.setParam(0, false); p.update(); CHECK(!p.active(0), "released still active");
+        p.setParam(1, true); p.update(); p.setParam(11, true); p.update(); p.setParam(1, false); p.update();
+        CHECK(p.active(1), "pad pressed when Hold turned on did not latch");
+        p.setParam(2, true); p.update(); p.setParam(2, false); p.update();
+        CHECK(p.active(2), "press under Hold did not latch");
+        p.setParam(2, true); p.update(); p.setParam(2, false); p.update();
+        CHECK(!p.active(2), "second press under Hold did not unlatch");
+        p.setParam(3, true); p.update();
+        p.setParam(11, false); p.update();
+        CHECK(!p.active(1) && p.active(3), "Hold off: latches must drop, held pads stay");
+        p.setParam(3, false); p.update(); CHECK(!p.active(3), "held pad stuck");
+        // Notes 36..47, out of range ignored, param + note combined
+        p.noteOn(36); p.update(); CHECK(p.active(0) && p.mask() == 1u, "note 36 -> crush, mask %u", p.mask());
+        p.noteOn(35); p.noteOn(48); p.update(); CHECK(p.mask() == 1u, "out of range notes changed mask");
+        p.setParam(0, true); p.noteOff(36); p.update(); CHECK(p.active(0), "param still held");
+        p.setParam(0, false); p.update(); CHECK(!p.active(0), "nothing held");
+        p.noteOn(47); p.update(); p.setParam(11, true); p.update(); p.noteOff(47); p.update();
+        CHECK(p.holdOn(), "Hold toggled on screen + note: must stay on while either is on");
+        p.setParam(11, false); p.update(); CHECK(!p.holdOn() && p.mask() == 0u, "hold stuck");
+    }
+    {   // Engage: 0 -> 1 in 8 ms, monotone; at 0 the blend is the dry signal bit-exact
+        dsp::Engage e; e.prepare(sr);
+        int n = 0; float last = 0; bool mono = true;
+        while (e.next(true) < 1.0f) { ++n; mono = mono && e.value >= last; last = e.value; }
+        CHECK(std::abs(n + 1 - 384) <= 1 && mono, "engage ramp %d samples", n + 1);
+        CHECK(dsp::blend(0.123456f, 0.9f, 0.0f) == 0.123456f, "blend 0 not dry");
+    }
+    {   // History: integer delays exact, fractional reads between neighbours
+        dsp::History h; h.prepare(sr, 0.1);
+        for (int i = 0; i < 1000; ++i) h.push((float) i, (float) -i);
+        CHECK(h.read(0, 1) == 999.0f && h.read(1, 10) == -990.0f, "integer delays not exact");
+        CHECK(std::fabs(h.read(0, 10.5) - 989.5f) < 1e-3f && std::fabs(h.read(0, 1.5) - 998.5f) < 1e-3f, "fractional read on a ramp");
+        CHECK(h.at(0, 500) == 500.0f, "absolute index");
+    }
+}
+
 int main() {
     testTine();
     testEffects();
@@ -449,6 +526,7 @@ int main() {
     testSpace();
     testPad();
     testPresets();
+    testGlitchBasics();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all DSP tests passed\n");
     return 0;
