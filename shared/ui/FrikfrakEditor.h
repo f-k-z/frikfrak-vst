@@ -81,7 +81,8 @@ public:
             lnf.setColour(juce::PopupMenu::highlightedTextColourId, col::bg);
             addAndMakeVisible(presets);
         }
-        setSize(2 * (kPad + kCardPad) + (int) knobs.size() * kCellW, kHeaderH + 2 * kPad + 2 * kCardPad + kCellH);
+        const int n = (int) knobs.size(), cols = std::min(n, kMaxCols), rows = (n + kMaxCols - 1) / kMaxCols;
+        setSize(2 * (kPad + kCardPad) + cols * kCellW, kHeaderH + 2 * kPad + 2 * kCardPad + rows * kCellH);
     }
     ~Editor() override { setLookAndFeel(nullptr); }
 
@@ -129,7 +130,7 @@ public:
     }
 
 private:
-    static constexpr int kHeaderH = 72, kPad = 20, kCardPad = 14, kCellW = 104, kNameH = 28, kCellH = kNameH + 6 + 78 + 22;
+    static constexpr int kHeaderH = 72, kPad = 20, kCardPad = 14, kCellW = 104, kNameH = 28, kCellH = kNameH + 6 + 78 + 22, kMaxCols = 8;  // wrap to a new row after 8 knobs
 
     struct Knob {
         Knob(juce::AudioProcessorValueTreeState& apvts, juce::RangedAudioParameter& p)
@@ -158,7 +159,7 @@ private:
 
     juce::Rectangle<int> cardBounds() const { return getLocalBounds().withTrimmedTop(kHeaderH).reduced(kPad); }
     juce::Rectangle<int> cell(size_t i) const {
-        return cardBounds().reduced(kCardPad).withWidth(kCellW).translated((int) i * kCellW, 0).withHeight(kCellH);
+        return cardBounds().reduced(kCardPad).withSize(kCellW, kCellH).translated((int) (i % kMaxCols) * kCellW, (int) (i / kMaxCols) * kCellH);
     }
 
     LookAndFeel lnf;  // first: outlives the knobs
