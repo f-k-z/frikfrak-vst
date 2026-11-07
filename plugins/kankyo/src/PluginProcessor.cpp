@@ -37,7 +37,7 @@ void KankyoProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         float a = l[i], b = r[i];
         chorus.process(a, b, ch);
         reverb.process(a, b, space, size);
-        const float g = volumeS.next(volume);
+        const float g = volumeS.next(volume) * kankyo::kOutputMakeup;
         l[i] = juce::jlimit(-1.0f, 1.0f, a * g);  // hard safety ceiling
         r[i] = juce::jlimit(-1.0f, 1.0f, b * g);
     }

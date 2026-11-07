@@ -5,6 +5,7 @@
 #include "dsp/Space.h"
 #include "dsp/Pad.h"
 #include "Presets.h"
+#include "../plugins/kankyo/src/Presets.h"
 #include <set>
 #include <string>
 #include <cmath>
@@ -411,6 +412,33 @@ static void testPad() {
 
 static void testPresets() {
     checkPresets("rhodes", rhodes::kParams, rhodes::kPresets, 10);
+    checkPresets("kankyo", kankyo::kParams, kankyo::kPresets, 30);
+
+    // Every Kankyo preset, full chain (4-note chord, chorus, reverb, volume): no clipping, homogeneous level
+    const double sr = 48000;
+    for (const auto& pr : kankyo::kPresets) {
+        const auto& v = pr.v;
+        const dsp::Pad::Params p { v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11] };
+        std::array<dsp::Pad, 4> voices;
+        const float notes[4] = { 130.81f, 164.81f, 196.0f, 246.94f };  // Cmaj7, C3
+        for (size_t k = 0; k < 4; ++k) { voices[k].prepare(sr); voices[k].noteOn(notes[k], 0.8f, (uint32_t) k); }
+        dsp::Chorus ch; ch.prepare(sr, v[12]);
+        dsp::Reverb rv; rv.prepare(sr, v[13], v[14]);
+        const float g = std::pow(10.0f, v[15] / 20.0f) * kankyo::kOutputMakeup;
+        Buf out((size_t) (8 * sr));
+        for (size_t i = 0; i < out.size(); ++i) {
+            if (i == (size_t) (6 * sr)) for (auto& vo : voices) vo.noteOff();
+            float l = 0, r = 0;
+            for (auto& vo : voices) { float a, b; vo.process(a, b, p); l += a; r += b; }
+            ch.process(l, r, v[12]); rv.process(l, r, v[13], v[14]);
+            out[i] = l * g;
+        }
+        double peak = 0; for (float x : out) peak = std::max(peak, (double) std::fabs(x));
+        double loud = 0;  // loudest 0.5 s window
+        for (size_t w = 0; w + 24000 <= out.size(); w += 12000) loud = std::max(loud, rms(out, w, 24000));
+        const double db = 20 * std::log10(loud + 1e-12);
+        CHECK(peak <= 1.0 && db > -22 && db < -10, "kankyo preset %-13s peak %.2f  loudest %.1f dBFS", pr.name, peak, db);
+    }
 }
 
 int main() {
