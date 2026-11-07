@@ -29,6 +29,7 @@ endfunction()
 add_subdirectory(plugins/rhodes)
 add_subdirectory(plugins/vinyl-noise)
 add_subdirectory(plugins/kankyo)
+add_subdirectory(plugins/glitch)
 
 # Pure C++ DSP tests (no JUCE). CHECK macro, so they run in every build type.
 enable_testing()
