@@ -1,14 +1,11 @@
 #pragma once
-// Parameter specs and factory presets, pure C++ (shared by createLayout() and dsp_tests).
-// IDs are part of saved Live sets: never rename one. Order here = knob order in the UI.
+// Rhodes parameter specs and factory presets (see shared/presets/PresetTable.h).
 // Presets are by-ear interpretations of nu soul records, not documented settings.
-#include <array>
+#include "presets/PresetTable.h"
 
 namespace rhodes {
 
-struct ParamSpec { const char* id; const char* name; float min, max, def; };
-
-inline constexpr std::array<ParamSpec, 8> kParams { {
+inline constexpr std::array<presets::ParamSpec, 8> kParams { {
     { "bark", "Bark", 0.0f, 1.0f, 0.5f },
     { "decay", "Decay", 0.25f, 2.0f, 1.0f },
     { "tone", "Tone", 0.0f, 1.0f, 1.0f },
@@ -19,9 +16,7 @@ inline constexpr std::array<ParamSpec, 8> kParams { {
     { "volume", "Volume (dB)", -24.0f, 6.0f, -6.0f },
 } };
 
-struct Preset { const char* name; std::array<float, kParams.size()> v; };  // values in kParams order
-
-inline constexpr std::array<Preset, 12> kPresets { {
+inline constexpr std::array<presets::Preset<kParams.size()>, 12> kPresets { {
     //                      bark  decay tone  drive phaser tremHz tremD  vol
     { "Init",             { 0.50f, 1.00f, 1.00f, 0.20f, 0.00f, 4.5f, 0.30f, -6.0f } },
     { "Smoke Room",       { 0.35f, 1.30f, 0.45f, 0.30f, 0.00f, 3.0f, 0.15f, -6.0f } },  // D'Angelo, Untitled (How Does It Feel)

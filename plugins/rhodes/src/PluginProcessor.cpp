@@ -1,6 +1,5 @@
 #include "PluginProcessor.h"
 #include "RhodesVoice.h"
-#include "Presets.h"
 
 namespace {
 constexpr int kVoices = 32;  // generous so JUCE's hard voice-steal stays rare with the pedal down
@@ -14,27 +13,7 @@ RhodesProcessor::RhodesProcessor()
     synth.addSound(new RhodesSound());
 }
 
-juce::AudioProcessorValueTreeState::ParameterLayout RhodesProcessor::createLayout() {
-    juce::AudioProcessorValueTreeState::ParameterLayout l;
-    for (const auto& p : rhodes::kParams)
-        l.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID { p.id, 1 }, p.name, juce::NormalisableRange<float>(p.min, p.max), p.def));
-    return l;
-}
-
-int RhodesProcessor::getNumPrograms() { return (int) rhodes::kPresets.size(); }
-
-const juce::String RhodesProcessor::getProgramName(int i) {
-    return juce::isPositiveAndBelow(i, (int) rhodes::kPresets.size()) ? juce::String::fromUTF8(rhodes::kPresets[(size_t) i].name) : juce::String();
-}
-
-void RhodesProcessor::setCurrentProgram(int i) {
-    if (!juce::isPositiveAndBelow(i, (int) rhodes::kPresets.size())) return;
-    const auto& preset = rhodes::kPresets[(size_t) i];
-    for (size_t k = 0; k < rhodes::kParams.size(); ++k)
-        if (auto* p = params.getParameter(rhodes::kParams[k].id))
-            p->setValueNotifyingHost(p->convertTo0to1(preset.v[k]));
-    program = i;
-}
+juce::AudioProcessorValueTreeState::ParameterLayout RhodesProcessor::createLayout() { return presets::makeLayout(rhodes::kParams); }
 
 bool RhodesProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const {
     return layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo();
@@ -71,18 +50,7 @@ void RhodesProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     }
 }
 
-void RhodesProcessor::getStateInformation(juce::MemoryBlock& dest) {
-    auto state = params.copyState();
-    state.setProperty("program", program.load(), nullptr);
-    if (auto xml = state.createXml()) copyXmlToBinary(*xml, dest);
-}
-
-void RhodesProcessor::setStateInformation(const void* data, int size) {
-    if (auto xml = getXmlFromBinary(data, size); xml && xml->hasTagName(params.state.getType())) {
-        const auto state = juce::ValueTree::fromXml(*xml);
-        program = (int) state.getProperty("program", 0);
-        params.replaceState(state);
-    }
-}
+void RhodesProcessor::getStateInformation(juce::MemoryBlock& dest) { programs.save(params, dest); }
+void RhodesProcessor::setStateInformation(const void* data, int size) { programs.load(params, data, size); }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new RhodesProcessor(); }

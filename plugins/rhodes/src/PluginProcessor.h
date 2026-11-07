@@ -1,5 +1,7 @@
 #pragma once
+#include "Presets.h"
 #include "dsp/Effects.h"
+#include "plugin/PresetHost.h"
 #include "ui/FrikfrakEditor.h"
 #include <juce_audio_utils/juce_audio_utils.h>
 
@@ -21,10 +23,10 @@ public:
     bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override { return 0.0; }
 
-    int getNumPrograms() override;
-    int getCurrentProgram() override { return program; }
-    void setCurrentProgram(int) override;  // applies a factory preset (Presets.h)
-    const juce::String getProgramName(int) override;
+    int getNumPrograms() override { return programs.count(); }
+    int getCurrentProgram() override { return programs.current(); }
+    void setCurrentProgram(int i) override { programs.apply(params, i); }  // factory preset (Presets.h)
+    const juce::String getProgramName(int i) override { return programs.name(i); }
     void changeProgramName(int, const juce::String&) override {}
 
     void getStateInformation(juce::MemoryBlock&) override;
@@ -41,7 +43,7 @@ private:
     dsp::Tremolo tremolo;
     dsp::Tone tone;
     dsp::Phaser phaser;
-    std::atomic<int> program { 0 };
+    presets::Programs<rhodes::kParams.size(), rhodes::kPresets.size()> programs { rhodes::kParams, rhodes::kPresets };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(RhodesProcessor)
 };

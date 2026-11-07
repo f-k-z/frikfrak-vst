@@ -260,21 +260,25 @@ static void testToneAndPhaser() {
     CHECK(finiteAndBounded(thru(ph, 1.0f, thru(t, 0.0f, big)), 2.0f), "tone/phaser unbounded");
 }
 
-static void testPresets() {
-    const auto& P = rhodes::kPresets;
-    CHECK(P.size() >= 10 && P.size() <= 14, "preset count %zu", P.size());
-    std::set<std::string> names;
-    for (const auto& p : P) {
-        CHECK(p.name && *p.name, "empty preset name");
+template <std::size_t N, std::size_t P>
+static void checkPresets(const char* plugin, const std::array<presets::ParamSpec, N>& specs, const std::array<presets::Preset<N>, P>& table, std::size_t minCount) {
+    CHECK(P >= minCount, "%s: only %zu presets", plugin, P);
+    std::set<std::string> names, ids;
+    for (const auto& s : specs) { ids.insert(s.id); CHECK(s.min < s.max && s.def >= s.min && s.def <= s.max, "%s: bad spec %s", plugin, s.id); }
+    CHECK(ids.size() == N, "%s: duplicate param ids", plugin);
+    for (const auto& p : table) {
+        CHECK(p.name && *p.name, "%s: empty preset name", plugin);
         names.insert(p.name);
-        for (size_t k = 0; k < rhodes::kParams.size(); ++k) {
-            const auto& s = rhodes::kParams[k];
-            CHECK(p.v[k] >= s.min && p.v[k] <= s.max, "%s: %s=%g outside [%g, %g]", p.name, s.id, p.v[k], s.min, s.max);
-        }
+        for (size_t k = 0; k < N; ++k)
+            CHECK(p.v[k] >= specs[k].min && p.v[k] <= specs[k].max, "%s/%s: %s=%g outside [%g, %g]", plugin, p.name, specs[k].id, p.v[k], specs[k].min, specs[k].max);
     }
-    CHECK(names.size() == P.size(), "duplicate preset names");
-    for (size_t k = 0; k < rhodes::kParams.size(); ++k)
-        CHECK(P[0].v[k] == rhodes::kParams[k].def, "Init %s=%g != default %g", rhodes::kParams[k].id, P[0].v[k], rhodes::kParams[k].def);
+    CHECK(names.size() == P, "%s: duplicate preset names", plugin);
+    for (size_t k = 0; k < N; ++k)
+        CHECK(table[0].v[k] == specs[k].def, "%s: Init %s=%g != default %g", plugin, specs[k].id, table[0].v[k], specs[k].def);
+}
+
+static void testPresets() {
+    checkPresets("rhodes", rhodes::kParams, rhodes::kPresets, 10);
 }
 
 int main() {
