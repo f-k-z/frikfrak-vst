@@ -61,8 +61,8 @@ public:
     void prepare(double sampleRate, float initialMix, float initialSize) {
         sr = sampleRate;
         static constexpr std::array<int, kLines> base48 { 1559, 1907, 2297, 2711, 3089, 3539, 3967, 4421 };  // primes, ~32-92 ms
-        for (int k = 0; k < kLines; ++k) {
-            len[k] = (float) base48[(size_t) k] * (float) (sr / 48000.0);
+        for (size_t k = 0; k < (size_t) kLines; ++k) {
+            len[k] = (float) base48[k] * (float) (sr / 48000.0);
             int n = 1;
             while (n < (int) len[k] + 16) n <<= 1;
             line[k].assign((size_t) n, 0.0f);
@@ -91,7 +91,7 @@ public:
 
         std::array<float, kLines> y {};
         float sum = 0.0f;
-        for (int k = 0; k < kLines; ++k) {
+        for (size_t k = 0; k < (size_t) kLines; ++k) {
             modPhase[k] += kTwoPi * (0.07f + 0.031f * (float) k) / (float) sr;
             if (modPhase[k] >= kTwoPi) modPhase[k] -= kTwoPi;
             const float d = len[k] + (k < 4 ? 6.0f * std::sin(modPhase[k]) : 0.0f);  // anti-metallic wobble
@@ -101,7 +101,7 @@ public:
         }
         const float h = sum * (2.0f / (float) kLines);  // Householder: x - 2/N * sum
         float wl = 0.0f, wr = 0.0f;
-        for (int k = 0; k < kLines; ++k) {
+        for (size_t k = 0; k < (size_t) kLines; ++k) {
             const float x = y[(size_t) k] - h;
             line[k][(size_t) (write & mask[k])] = in * inGain * ((k & 1) ? -1.0f : 1.0f) + gain[k] * x;
             if (k & 1) wr += y[(size_t) k]; else wl += y[(size_t) k];
@@ -118,10 +118,10 @@ private:
         lastSize = s;
         const float rt = rt60For(s);
         float g2 = 0.0f;
-        for (int k = 0; k < kLines; ++k) { gain[k] = std::pow(10.0f, -3.0f * len[k] / (rt * (float) sr)); g2 += gain[k] * gain[k]; }
+        for (size_t k = 0; k < (size_t) kLines; ++k) { gain[k] = std::pow(10.0f, -3.0f * len[k] / (rt * (float) sr)); g2 += gain[k] * gain[k]; }
         inGain = std::sqrt(1.0f - g2 / (float) kLines);  // steady-state level independent of decay
     }
-    float read(int k, float delay) const {
+    float read(size_t k, float delay) const {
         const float pos = (float) write - delay;
         const int i = (int) std::floor(pos);
         const float t = pos - (float) i;

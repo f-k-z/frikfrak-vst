@@ -6,7 +6,7 @@
 
 namespace presets {
 
-struct ParamSpec { const char* id; const char* name; float min, max, def; };
+struct ParamSpec { const char* id; const char* name; float min, max, def; float skew = 1.0f; };  // skew < 1: finer low end
 
 template <std::size_t N>
 struct Preset { const char* name; std::array<float, N> v; };  // values in spec order

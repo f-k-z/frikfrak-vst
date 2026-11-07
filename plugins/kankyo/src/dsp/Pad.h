@@ -65,8 +65,9 @@ public:
         }
         const float key = std::sqrt(std::max(f0, 20.0f) / 261.6f);  // half key tracking
         const float fc = std::clamp(150.0f * std::pow(16000.0f / 150.0f, p.color) * key * (1.0f + 0.35f * lfo), 30.0f, 0.45f * (float) sr);
-        aL = svf[0].lowpass(aL * 0.45f, fc, (float) sr);
-        aR = svf[1].lowpass(aR * 0.45f, fc, (float) sr);
+        const float gA = Svf::coeff(fc, (float) sr);  // one tan() shared by both channels
+        aL = svf[0].lowpass(aL * 0.45f, gA);
+        aR = svf[1].lowpass(aR * 0.45f, gA);
 
         // FM layer: index decays toward sustain with ~0.3 x decay time (woody mallets when sustain is low)
         idx += (p.sustain - idx) * (1.0f - std::exp(-1.0f / (0.3f * p.decay * (float) sr)));
@@ -76,7 +77,7 @@ public:
         pm += f0 * p.ratio / (float) sr; pm -= std::floor(pm);
 
         // Breath: band-passed noise around the cutoff
-        const float n = noiseF.bandpass(rng.bipolar(), std::clamp(fc * 1.5f, 200.0f, 0.4f * (float) sr), (float) sr) * p.air * 1.2f;
+        const float n = p.air > 0.0f ? noiseF.bandpass(rng.bipolar(), Svf::coeff(std::clamp(fc * 1.5f, 200.0f, 0.4f * (float) sr), (float) sr)) * p.air * 1.2f : 0.0f;
 
         const float g = level * vel * 0.25f;
         outL = g * ((1.0f - p.blend) * aL + p.blend * fm + n);
@@ -88,15 +89,16 @@ private:
 
     struct Svf {  // TPT state-variable filter (Zavalishin), Q ~0.8
         float s1 = 0.0f, s2 = 0.0f;
-        void run(float x, float fc, float sr, float& lp, float& bp) {
-            const float g = std::tan(3.14159265f * fc / sr), k = 1.25f;
+        static float coeff(float fc, float sr) { return std::tan(3.14159265f * fc / sr); }
+        void run(float x, float g, float& lp, float& bp) {
+            const float k = 1.25f;
             const float h = 1.0f / (1.0f + g * (g + k));
             const float hp = (x - (g + k) * s1 - s2) * h;
             bp = g * hp + s1; s1 = g * hp + bp;
             lp = g * bp + s2; s2 = g * bp + lp;
         }
-        float lowpass(float x, float fc, float sr) { float lp, bp; run(x, fc, sr, lp, bp); return lp; }
-        float bandpass(float x, float fc, float sr) { float lp, bp; run(x, fc, sr, lp, bp); return bp; }
+        float lowpass(float x, float g) { float lp, bp; run(x, g, lp, bp); return lp; }
+        float bandpass(float x, float g) { float lp, bp; run(x, g, lp, bp); return bp; }
     };
 
     static float blep(float t, float dt) {

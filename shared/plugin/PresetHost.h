@@ -11,7 +11,7 @@ template <std::size_t N>
 juce::AudioProcessorValueTreeState::ParameterLayout makeLayout(const std::array<ParamSpec, N>& specs) {
     juce::AudioProcessorValueTreeState::ParameterLayout l;
     for (const auto& p : specs)
-        l.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID { p.id, 1 }, p.name, juce::NormalisableRange<float>(p.min, p.max), p.def));
+        l.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID { p.id, 1 }, p.name, juce::NormalisableRange<float>(p.min, p.max, 0.0f, p.skew), p.def));
     return l;
 }
 
