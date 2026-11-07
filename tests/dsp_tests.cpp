@@ -2,6 +2,7 @@
 #include "dsp/Effects.h"
 #include "dsp/RhodesTine.h"
 #include "dsp/Vinyl.h"
+#include "dsp/Space.h"
 #include "Presets.h"
 #include <set>
 #include <string>
@@ -277,6 +278,68 @@ static void checkPresets(const char* plugin, const std::array<presets::ParamSpec
         CHECK(table[0].v[k] == specs[k].def, "%s: Init %s=%g != default %g", plugin, specs[k].id, table[0].v[k], specs[k].def);
 }
 
+static void testSpace() {
+    const double sr = 48000;
+    auto noise = [](size_t n, float amp) { dsp::Rng g; Buf x(n); for (auto& v : x) v = amp * g.bipolar(); return x; };
+    // Bypass at mix 0
+    {
+        auto s = noise(48000, 0.5f);
+        dsp::Chorus ch; ch.prepare(sr, 0.0f);
+        dsp::Reverb rv; rv.prepare(sr, 0.0f, 0.5f);
+        bool same = true;
+        for (float x : s) { float l = x, r = x; ch.process(l, r, 0.0f); rv.process(l, r, 0.0f, 0.5f); if (l != x || r != x) { same = false; break; } }
+        CHECK(same, "chorus/reverb mix 0 not an exact bypass");
+    }
+    // Reverb RT60 follows size; L/R decorrelated
+    auto rt60 = [&](float size, double* corr) {
+        dsp::Reverb rv; rv.prepare(sr, 1.0f, size);
+        const size_t n = (size_t) (16 * sr);
+        Buf L(n), R(n);
+        for (size_t i = 0; i < n; ++i) { float l = i == 0 ? 1.0f : 0.0f, r = l; rv.process(l, r, 1.0f, size); L[i] = l; R[i] = r; }
+        if (corr) {
+            double lr = 0, ll = 0, rr = 0;
+            for (size_t i = 0; i < (size_t) sr; ++i) { lr += L[i] * R[i]; ll += L[i] * L[i]; rr += R[i] * R[i]; }
+            *corr = lr / std::sqrt(ll * rr);
+        }
+        const size_t w = 2400;  // 50 ms windows
+        double peak = 0; size_t tPeak = 0;
+        std::vector<double> e;
+        for (size_t i = 0; i + w <= n; i += w) { e.push_back(rms(L, i, w)); if (e.back() > peak) { peak = e.back(); tPeak = e.size() - 1; } }
+        double t5 = -1, t25 = -1;
+        for (size_t k = tPeak; k < e.size(); ++k) {
+            const double db = 20 * std::log10(e[k] / peak + 1e-12);
+            if (t5 < 0 && db < -5) t5 = (double) k * 0.05;
+            if (t25 < 0 && db < -25) { t25 = (double) k * 0.05; break; }
+        }
+        return t25 > 0 ? 3.0 * (t25 - t5) : 99.0;
+    };
+    double corr = 1;
+    const double rtLo = rt60(0.0f, &corr), rtHi = rt60(1.0f, nullptr);
+    CHECK(rtLo > 0.9 && rtLo < 2.1, "reverb size 0 RT60=%.2f s (want ~1.5)", rtLo);
+    CHECK(rtHi > 6.0 && rtHi < 14.0, "reverb size 1 RT60=%.2f s (want ~10)", rtHi);
+    CHECK(std::fabs(corr) < 0.5, "reverb L/R correlation %.2f", corr);
+    // Stability: loud noise at max size, then silence -> decays, finite, bounded
+    {
+        dsp::Reverb rv; rv.prepare(sr, 1.0f, 1.0f);
+        auto in = noise((size_t) sr, 1.0f);
+        Buf out((size_t) (30 * sr));
+        for (size_t i = 0; i < out.size(); ++i) { float l = i < in.size() ? in[i] : 0.0f, r = l; rv.process(l, r, 1.0f, 1.0f); out[i] = l; }
+        CHECK(finiteAndBounded(out, 2.0f), "reverb unbounded");
+        CHECK(rms(out, out.size() - 48000, 48000) < 0.01 * rms(out, 48000, 48000), "reverb does not decay");
+    }
+    // Chorus: moving comb on a sine -> level wobbles over time, bounded
+    {
+        dsp::Chorus ch; ch.prepare(sr, 1.0f);
+        auto s = sine(sr, 1000, 4.0, 0.5f);
+        Buf y(s.size());
+        for (size_t i = 0; i < s.size(); ++i) { float l = s[i], r = s[i]; ch.process(l, r, 1.0f); y[i] = l; }
+        double lo = 1e9, hi = 0;
+        for (size_t w = 4800; w + 2400 <= y.size(); w += 2400) { const double v = rms(y, w, 2400); lo = std::min(lo, v); hi = std::max(hi, v); }
+        CHECK(20 * std::log10(hi / lo) > 0.5, "chorus does not modulate: %.2f dB", 20 * std::log10(hi / lo));
+        CHECK(finiteAndBounded(y, 1.0f), "chorus unbounded");
+    }
+}
+
 static void testPresets() {
     checkPresets("rhodes", rhodes::kParams, rhodes::kPresets, 10);
 }
@@ -286,6 +349,7 @@ int main() {
     testEffects();
     testVinyl();
     testToneAndPhaser();
+    testSpace();
     testPresets();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all DSP tests passed\n");
