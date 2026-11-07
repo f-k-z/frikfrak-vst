@@ -10,6 +10,7 @@ cmake --build build -j                      # installe aussi dans ~/Library/Audi
 ctest --test-dir build                      # tests DSP (exécutable dsp_tests)
 auval -v aumu Rhdx Frik                     # valider l'AU Rhodes
 auval -v aumu Vnzx Frik                     # valider l'AU Vinyl Noise
+auval -v aumu Knkx Frik                     # valider l'AU Kankyo
 ```
 
 Après un rebuild : relancer Live (un plugin déjà chargé reste en mémoire), et si l'AU n'est pas à jour : `killall -9 AudioComponentRegistrar`.
@@ -17,12 +18,13 @@ Après un rebuild : relancer Live (un plugin déjà chargé reste en mémoire), 
 ## Architecture
 
 - `CMakeLists.txt` racine : récupère JUCE, définit `frikfrak_plugin_setup()` (includes, flags, linkage communs), ajoute chaque plugin, déclare `dsp_tests`.
-- `shared/dsp/Effects.h` : DSP commun header-only (`Smoother`, `DcBlocker`, `Rng`, drive, trémolo), namespace `dsp`.
+- `shared/dsp/Effects.h` : DSP commun header-only (`Smoother`, `DcBlocker`, `Rng`, drive, trémolo, `Tone`, `Phaser`), namespace `dsp`. `shared/dsp/Space.h` : `Chorus` (Juno) et `Reverb` (FDN 8 lignes, mix 0 = bypass exact).
 - `plugins/<nom>/` : `CMakeLists.txt` (`juce_add_plugin` + `frikfrak_plugin_setup`) et `src/`.
   - `src/dsp/*.h` : DSP **pur C++, sans JUCE** (testable hors plugin).
   - `src/PluginProcessor.*` : glue JUCE (APVTS, bus, état). UI : `ui::Editor` partagé.
 - `shared/ui/FrikfrakEditor.h` : éditeur commun (palette du site fgillet, logo, un potard rotatif par paramètre, automatiquement). Unité affichée = texte entre parenthèses du nom de paramètre (`"Volume (dB)"`) ; plage 0..1 → affichée en %.
-- `plugins/rhodes/src/Presets.h` : specs des paramètres du Rhodes (id, bornes, défaut, ordre des potards) et presets d'usine, C++ pur ; `createLayout()` et les tests lisent cette table. Ajouter un preset = une ligne ; un paramètre = une spec + une colonne dans chaque preset.
+- Presets : `shared/presets/PresetTable.h` (`ParamSpec` id/bornes/défaut/skew, `Preset<N>`, C++ pur) et `shared/plugin/PresetHost.h` (layout APVTS, programmes hôte, index sauvé dans l'état). Chaque plugin à presets a son `src/Presets.h` (Rhodes, Kankyo) ; ordre des specs = ordre des potards (8 par rangée). Ajouter un preset = une ligne ; un paramètre = une spec + une colonne dans chaque preset. Le preset 0 (« Init ») doit égaler les défauts (testé).
+- Kankyo : niveaux des presets normalisés par un test qui rend chaque preset sur toute la chaîne ; après un changement de DSP qui touche le niveau, ajuster les colonnes Volume.
 - `shared/assets/logo.svg` : embarqué via `juce_add_binary_data` (`BinaryData::logo_svg`).
 - `tests/dsp_tests.cpp` : tests de propriétés sur le DSP pur (macro `CHECK`, pas `assert`, pour tourner en Release).
 - `docs/plans/` : plans de conception.
