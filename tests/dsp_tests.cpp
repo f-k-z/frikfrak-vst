@@ -3,6 +3,7 @@
 #include "dsp/RhodesTine.h"
 #include "dsp/Vinyl.h"
 #include "dsp/Space.h"
+#include "dsp/Pad.h"
 #include "Presets.h"
 #include <set>
 #include <string>
@@ -340,6 +341,74 @@ static void testSpace() {
     }
 }
 
+static Buf renderPad(const dsp::Pad::Params& p, float hz, double seconds, double offAt = -1, Buf* right = nullptr, float vel = 1.0f) {
+    const double sr = 48000;
+    dsp::Pad v; v.prepare(sr); v.noteOn(hz, vel, 7);
+    Buf out((size_t) (seconds * sr));
+    if (right) right->assign(out.size(), 0.0f);
+    for (size_t i = 0; i < out.size(); ++i) {
+        if (offAt >= 0 && i == (size_t) (offAt * sr)) v.noteOff();
+        float l, r; v.process(l, r, p); out[i] = l; if (right) (*right)[i] = r;
+    }
+    return out;
+}
+
+static void testPad() {
+    const double sr = 48000;
+    dsp::Pad::Params base; base.attack = 0.005f; base.motion = 0; base.detune = 0; base.air = 0;
+    // Analog saw: fundamental on pitch
+    { auto p = base; p.blend = 0; p.shape = 0.5f; p.color = 1;
+      auto y = renderPad(p, 220, 1.0);
+      const double f = peakFreq(y, 4800, 38400, sr, 220);
+      CHECK(std::fabs(f - 220) < 1.1, "analog pitch %.2f Hz", f); }
+    // FM: carrier on pitch; sidebands only when Bright > 0
+    { auto p = base; p.blend = 1; p.ratio = 1; p.bright = 0;
+      auto y = renderPad(p, 220, 1.0);
+      CHECK(std::fabs(peakFreq(y, 4800, 38400, sr, 220) - 220) < 1.1, "fm pitch off");
+      p.ratio = 3.5f;
+      const double side0 = goertzel(renderPad(p, 220, 1.0), 4800, 38400, sr, 220 * 4.5);
+      p.bright = 0.5f;
+      auto yb = renderPad(p, 220, 1.0);
+      const double fund = goertzel(yb, 4800, 38400, sr, 220), side = goertzel(yb, 4800, 38400, sr, 220 * 4.5);
+      CHECK(side > 0.01 * fund, "no FM sideband at 4.5f with bright: %g vs %g", side, fund);
+      CHECK(side0 < 0.01 * side, "FM sideband without bright: %g vs %g", side0, side); }
+    // Envelope: slow attack, release from held level, voice ends
+    { auto p = base; p.blend = 1; p.bright = 0; p.ratio = 1; p.attack = 2; p.sustain = 1; p.release = 4;
+      auto y = renderPad(p, 220, 8.0, 3.0);
+      const double a01 = rms(y, (size_t) (0.08 * sr), 2400), a2 = rms(y, (size_t) (2.5 * sr), 2400), r1 = rms(y, (size_t) (4.0 * sr), 2400);
+      CHECK(a01 < 0.2 * a2, "attack too fast: %g vs %g", a01, a2);
+      CHECK(r1 > 0.05 * a2 && r1 < 0.5 * a2, "release 1 s after off: %.2f of held", r1 / a2);
+      dsp::Pad v; v.prepare(sr); v.noteOn(220, 1); 
+      for (int i = 0; i < (int) (0.5 * sr); ++i) { float l, r; v.process(l, r, p); }
+      v.noteOff();
+      for (int i = 0; i < (int) (8 * sr) && v.isActive(); ++i) { float l, r; v.process(l, r, p); }
+      CHECK(!v.isActive(), "voice never ends after release"); }
+    // Struck sound: sustain 0 decays away
+    { auto p = base; p.blend = 1; p.bright = 0.4f; p.sustain = 0; p.decay = 0.4f;
+      auto y = renderPad(p, 440, 3.0);
+      CHECK(rms(y, (size_t) (2 * sr), 2400) < 0.05 * rms(y, 240, 2400), "struck note does not decay"); }
+    // No click on note-off during attack (pure sine: max step << 0.05)
+    { auto p = base; p.blend = 1; p.bright = 0; p.ratio = 1; p.attack = 3; p.release = 0.05f;
+      auto y = renderPad(p, 220, 1.0, 0.3);
+      CHECK(maxStep(y, 1, y.size() - 1) < 0.05, "click: step %g", maxStep(y, 1, y.size() - 1)); }
+    // Anti-aliasing: saw at 4.1 kHz, folded 11th harmonic (2.9 kHz) well below the fundamental
+    { auto p = base; p.blend = 0; p.shape = 0.5f; p.color = 1;
+      auto y = renderPad(p, 4100, 1.0);
+      const double fund = goertzel(y, 4800, 38400, sr, 4100), alias = goertzel(y, 4800, 38400, sr, 2900);
+      CHECK(20 * std::log10(alias / fund) < -30, "aliasing %.1f dB", 20 * std::log10(alias / fund)); }
+    // Breath adds noise
+    { auto p = base; p.blend = 1; p.bright = 0; p.ratio = 1;
+      auto a = renderPad(p, 220, 0.5); p.air = 1; auto b = renderPad(p, 220, 0.5);
+      double d = 0; for (size_t i = 0; i < a.size(); ++i) d += (a[i] - b[i]) * (a[i] - b[i]);
+      CHECK(std::sqrt(d / (double) a.size()) > 1e-3, "air adds nothing"); }
+    // Extremes: finite and bounded
+    for (float hz : { 27.5f, 4186.0f })
+        for (float e : { 0.0f, 1.0f }) {
+            dsp::Pad::Params p; p.blend = e; p.shape = e; p.detune = e; p.color = e; p.ratio = e ? 14.0f : 0.5f; p.bright = e; p.air = e; p.motion = e; p.attack = 0.005f; p.sustain = e;
+            CHECK(finiteAndBounded(renderPad(p, hz, 0.5), 1.0f), "pad unbounded at %.0f Hz, extreme %.0f", hz, e);
+        }
+}
+
 static void testPresets() {
     checkPresets("rhodes", rhodes::kParams, rhodes::kPresets, 10);
 }
@@ -350,6 +419,7 @@ int main() {
     testVinyl();
     testToneAndPhaser();
     testSpace();
+    testPad();
     testPresets();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all DSP tests passed\n");

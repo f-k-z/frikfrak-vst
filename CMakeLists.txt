@@ -32,5 +32,5 @@ add_subdirectory(plugins/vinyl-noise)
 # Pure C++ DSP tests (no JUCE). CHECK macro, so they run in every build type.
 enable_testing()
 add_executable(dsp_tests tests/dsp_tests.cpp)
-target_include_directories(dsp_tests PRIVATE shared plugins/rhodes/src plugins/vinyl-noise/src)
+target_include_directories(dsp_tests PRIVATE shared plugins/rhodes/src plugins/vinyl-noise/src plugins/kankyo/src)
 add_test(NAME dsp_tests COMMAND dsp_tests)
