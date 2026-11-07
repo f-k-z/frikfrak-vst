@@ -1,7 +1,8 @@
 #pragma once
 // Glitch parameters as plain tables (pure C++). IDs are part of saved Live sets: never rename one.
-// Pad order = UI order = MIDI notes 36.. (Hold = 47).
+// Pad order = UI order = MIDI pitch classes C..A# (C1 = 36 = first pad); Hold has no note.
 #include <array>
+#include <string_view>
 
 namespace glitch {
 
@@ -44,5 +45,24 @@ inline constexpr std::array<KnobSpec, 15> kKnobs { {
     { Downer, "downer_rate", "Downer Rate", 0, 0, 2, 0, kDownerDivs.data(), (int) kDownerDivs.size() },
     { Downer, "downer_depth", "Downer Depth", 0.0f, 1.0f, 0.6f, 0.0f, nullptr, 0 },
 } };
+
+// Hardware knobs (Akai MPK Mini Plus default program: knobs 1-8 = CC 70-77).
+// Knobs 1-2 follow the last pressed effect (its 1st/2nd knob); knobs 3-8 are fixed.
+inline constexpr int kFirstKnobCC = 70;
+inline constexpr std::array<std::string_view, 6> kFixedKnobIds { "pitch_semi", "reverb_size", "stutter_div", "filter_freq", "echo_feedback", "gate_depth" };
+
+// Index in kKnobs driven by this CC, or -1 (unmapped CC, or the effect has no such knob).
+constexpr int knobForCC(int cc, int lastFx) {
+    const int slot = cc - kFirstKnobCC;
+    if (slot == 0 || slot == 1) {
+        for (int i = 0, seen = 0; i < (int) kKnobs.size(); ++i)
+            if (kKnobs[(size_t) i].fx == lastFx && seen++ == slot) return i;
+        return -1;
+    }
+    if (slot >= 2 && slot < 2 + (int) kFixedKnobIds.size())
+        for (int i = 0; i < (int) kKnobs.size(); ++i)
+            if (kKnobs[(size_t) i].id == kFixedKnobIds[(size_t) slot - 2]) return i;
+    return -1;
+}
 
 }  // namespace glitch

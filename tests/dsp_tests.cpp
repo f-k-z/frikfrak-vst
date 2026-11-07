@@ -7,6 +7,7 @@
 #include "dsp/Engage.h"
 #include "dsp/BeatClock.h"
 #include "dsp/Pads.h"
+#include "Params.h"
 #include "dsp/TimeFx.h"
 #include "dsp/ColorFx.h"
 #include "dsp/ThrowFx.h"
@@ -497,14 +498,25 @@ static void testGlitchBasics() {
         p.setParam(11, false); p.update();
         CHECK(!p.active(1) && p.active(3), "Hold off: latches must drop, held pads stay");
         p.setParam(3, false); p.update(); CHECK(!p.active(3), "held pad stuck");
-        // Notes 36..47, out of range ignored, param + note combined
+        // Notes by pitch class in any octave, param + note combined
         p.noteOn(36); p.update(); CHECK(p.active(0) && p.mask() == 1u, "note 36 -> crush, mask %u", p.mask());
-        p.noteOn(35); p.noteOn(48); p.update(); CHECK(p.mask() == 1u, "out of range notes changed mask");
-        p.setParam(0, true); p.noteOff(36); p.update(); CHECK(p.active(0), "param still held");
+        p.noteOn(48); p.noteOff(36); p.update(); CHECK(p.active(0), "C3 must keep crush held after C1 release");
+        p.noteOff(48); p.noteOn(46 + 24); p.update(); CHECK(p.mask() == (1u << 10) && p.lastPressed() == 10, "A#3 -> downer, mask %u", p.mask());
+        p.noteOff(70); p.noteOn(-1); p.noteOn(128); p.update(); CHECK(p.mask() == 0u, "out of range notes changed mask");
+        p.setParam(0, true); p.update(); CHECK(p.lastPressed() == 0, "last pressed not tracked");
+        p.noteOn(36); p.noteOff(36); p.update(); CHECK(p.active(0), "param still held");
         p.setParam(0, false); p.update(); CHECK(!p.active(0), "nothing held");
-        p.noteOn(47); p.update(); p.setParam(11, true); p.update(); p.noteOff(47); p.update();
-        CHECK(p.holdOn(), "Hold toggled on screen + note: must stay on while either is on");
-        p.setParam(11, false); p.update(); CHECK(!p.holdOn() && p.mask() == 0u, "hold stuck");
+        p.noteOn(47); p.noteOn(59); p.update(); CHECK(!p.holdOn() && p.mask() == 0u, "B notes must not trigger Hold");
+        p.noteOff(47); p.noteOff(59); p.update();
+    }
+    {   // Hardware knob CCs: 70-71 follow the last pressed effect, 72-77 fixed, others ignored
+        using namespace glitch;
+        auto id = [](int cc, int fx) { const int k = knobForCC(cc, fx); return k < 0 ? std::string_view {} : std::string_view(kKnobs[(size_t) k].id); };
+        CHECK(id(70, Echo) == "echo_time" && id(71, Echo) == "echo_feedback", "echo context knobs");
+        CHECK(id(70, Pitch) == "pitch_semi" && id(71, Pitch).empty(), "single-knob effect: CC 71 unmapped");
+        CHECK(id(70, Crush) == "crush_bits" && id(71, Downer) == "downer_depth", "context knobs");
+        for (int cc = 72; cc <= 77; ++cc) CHECK(id(cc, Crush) == kFixedKnobIds[(size_t) cc - 72], "fixed knob CC %d", cc);
+        CHECK(id(69, Crush).empty() && id(78, Crush).empty() && id(1, Crush).empty(), "unmapped CCs");
     }
     {   // Engage: 0 -> 1 in 8 ms, monotone; at 0 the blend is the dry signal bit-exact
         dsp::Engage e; e.prepare(sr);

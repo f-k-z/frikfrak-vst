@@ -7,7 +7,7 @@ Plugins audio maison (VST3 / AU, macOS Apple Silicon), pensés pour Ableton Live
 | **Frikfrak Rhodes** | Instrument | Piano électrique façon Rhodes Mark I des années 70, synthétisé (pas d'échantillons), avec tone, drive, phaser, trémolo et 12 presets nu soul |
 | **Frikfrak Vinyl Noise** | Instrument | Grain de disque joué au clavier : craquements et souffle tant qu'une touche est enfoncée |
 | **Frikfrak Kankyo** | Instrument | Pads ambient japonais (kankyō ongaku) : couches analogique + FM + souffle, chorus, grande réverb, 36 presets |
-| **Frikfrak Glitch** | Effet audio | Effets de performance à pads façon SP-404 / Koala, pour la piste Main : 11 effets calés sur le tempo, Hold, pilotage souris, MIDI Map et notes MIDI |
+| **Frikfrak Glitch** | Effet audio | Effets de performance à pads façon SP-404 / Koala, pour la piste Main : 11 effets calés sur le tempo, Hold, pilotage souris, MIDI Map, notes et potards MIDI (MPK Mini Plus) |
 
 ## Organisation
 
@@ -138,7 +138,21 @@ Pilotage :
 
 - **Souris** : pads maintenus ; Hold bascule au clic (on ne peut pas tenir un pad et Hold avec une seule souris).
 - **MIDI Map de Live** : chaque pad est un paramètre. Régler les pads du contrôleur en **CC momentané** (127 à l'appui, 0 au relâché) : un pad mappé sur une *note* dans le MIDI Map de Live se comporte en bascule, pas en maintien.
-- **Notes MIDI** (VST3 uniquement : Live n'envoie pas de MIDI aux AU) : **C1 (36) → A#1 (46)** = les 11 effets dans l'ordre du tableau, **B1 (47)** = Hold. Créer une piste MIDI vide (sans instrument), *MIDI To* → *Main* puis *Frikfrak Glitch*, Monitor sur *In*. Si *Main* n'apparaît pas dans *MIDI To*, poser Glitch sur une piste de groupe qui reçoit tout le mix, ou passer par le MIDI Map en CC.
+- **Notes MIDI** (VST3 uniquement : Live n'envoie pas de MIDI aux AU) : chaque note déclenche un pad selon son nom, **dans toutes les octaves** : C = Crush, C# = Pitch, D = Reverb … A = Echo, A# = Downer (ordre du tableau) ; B ne fait rien, Hold se règle à la souris. Les pads d'un contrôleur qui partent de C1 (36), comme ceux de l'Akai MPK Mini Plus, jouent les effets dans l'ordre ; les effets qui ne tiennent pas sur les pads se jouent au clavier. Dans Settings → Link/Tempo/MIDI, ne pas activer de *Control Surface* pour le MPK (sinon Live garde les potards pour lui) ; garder **Track** activé sur son entrée. Créer une piste MIDI vide (sans instrument), *MIDI To* → *Main* puis *Frikfrak Glitch*, Monitor sur *In*. Si *Main* n'apparaît pas dans *MIDI To*, poser Glitch sur une piste de groupe qui reçoit tout le mix, ou passer par le MIDI Map en CC.
+- **Potards matériels** (même routage MIDI, programme par défaut du MPK Mini Plus : CC 70–77) :
+
+  | Potard | CC | Règle |
+  |---|---|---|
+  | 1 | 70 | 1er potard du **dernier effet pressé** (pad, touche ou souris) |
+  | 2 | 71 | 2e potard du dernier effet pressé (rien si l'effet n'en a qu'un) |
+  | 3 | 72 | Pitch Semitones |
+  | 4 | 73 | Reverb Size |
+  | 5 | 74 | Stutter Division |
+  | 6 | 75 | Filter Freq |
+  | 7 | 76 | Echo Feedback |
+  | 8 | 77 | Gate Depth |
+
+  Les potards matériels sont absolus : la valeur saute à la position du potard au premier mouvement.
 
 Stutter, Gate, Reverse, Tape Stop, Echo et Downer suivent le tempo et la position de Live ; transport arrêté, ils tournent au dernier tempo connu. Les durées sont calculées avec un tempo plancher de 60 BPM. Les pads ne sont jamais rappelés avec un set (les potards, si). Tant qu'un effet ou une queue est actif, un plafond doux garde la sortie sous 0 dBFS.
 

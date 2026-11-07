@@ -19,7 +19,7 @@ public:
     bool hasEditor() const override { return true; }
 
     const juce::String getName() const override { return JucePlugin_Name; }
-    bool acceptsMidi() const override { return true; }  // notes 36..47 play the pads
+    bool acceptsMidi() const override { return true; }  // notes play the pads, CC 70-77 turn the knobs
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override { return 12.0; }  // max echo ring-out / reverb decay
@@ -40,6 +40,7 @@ private:
     float get(const char* id) const { return params.getRawParameterValue(id)->load(); }
     void readSettings();
 
+    std::array<juce::RangedAudioParameter*, glitch::kKnobs.size()> knobParams {};  // cached: no lookup on the audio thread
     dsp::Pads pads;
     dsp::BeatClock clock;
     dsp::GlitchChain chain;

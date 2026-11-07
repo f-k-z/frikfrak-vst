@@ -4,8 +4,6 @@
 namespace {
 juce::AudioProcessorValueTreeState::ParameterLayout createLayout() {
     juce::AudioProcessorValueTreeState::ParameterLayout l;
-    for (const auto& p : glitch::kPads)
-        l.add(std::make_unique<juce::AudioParameterBool>(juce::ParameterID { p.id, 1 }, p.name, false));
     for (const auto& k : glitch::kKnobs) {
         if (k.divs) {
             juce::StringArray labels;
@@ -15,13 +13,18 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout() {
             l.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID { k.id, 1 }, k.name, juce::NormalisableRange<float>(k.min, k.max, k.step), k.def));
         }
     }
+    // Pads after the knobs: Live's control surfaces put the controller's knobs on the first 8 parameters.
+    for (const auto& p : glitch::kPads)
+        l.add(std::make_unique<juce::AudioParameterBool>(juce::ParameterID { p.id, 1 }, p.name, false));
     return l;
 }
 }  // namespace
 
 GlitchProcessor::GlitchProcessor()
     : AudioProcessor(BusesProperties().withInput("Input", juce::AudioChannelSet::stereo(), true).withOutput("Output", juce::AudioChannelSet::stereo(), true)),
-      params(*this, nullptr, "params", createLayout()) {}
+      params(*this, nullptr, "params", createLayout()) {
+    for (size_t k = 0; k < glitch::kKnobs.size(); ++k) knobParams[k] = params.getParameter(glitch::kKnobs[k].id);
+}
 
 bool GlitchProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const {
     return layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo() && layouts.getMainInputChannelSet() == juce::AudioChannelSet::stereo();
@@ -90,6 +93,9 @@ void GlitchProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         if (m.isNoteOn()) pads.noteOn(m.getNoteNumber());
         else if (m.isNoteOff()) pads.noteOff(m.getNoteNumber());
         else if (m.isAllNotesOff() || m.isAllSoundOff()) pads.allNotesOff();
+        else if (m.isController())  // hardware knob: moves the parameter so the UI and the host follow
+            if (const int k = glitch::knobForCC(m.getControllerNumber(), pads.lastPressed()); k >= 0)
+                knobParams[(size_t) k]->setValueNotifyingHost((float) m.getControllerValue() / 127.0f);
         pads.update();
     }
     renderTo(n);

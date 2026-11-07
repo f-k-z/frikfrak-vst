@@ -4,20 +4,23 @@
 // Hold (parameter OR note) latches: pads pressed when Hold turns on stay on; while Hold is on,
 // each press toggles a pad's latch; Hold turning off releases every latch.
 #include <array>
+#include <bitset>
 #include <cstdint>
 
 namespace dsp {
 
 class Pads {
 public:
-    static constexpr int kEffects = 11, kHold = 11, kFirstNote = 36;  // C1 = first pad of most controllers
+    static constexpr int kEffects = 11, kHold = 11;
 
-    void reset() { param.fill(false); note.fill(false); prev.fill(false); latched.fill(false); holdPrev = false; }
+    void reset() { param.fill(false); notes.reset(); prev.fill(false); latched.fill(false); holdPrev = false; last = 0; }
 
+    // Notes map by pitch class in every octave: C = pad 1 ... A# = pad 11; B does nothing (Hold is
+    // on screen only). Pads from note 36 (C1) play the effects in order, any keyboard octave reaches all.
     void setParam(int i, bool on) { if (i >= 0 && i <= kHold) param[(size_t) i] = on; }
-    void noteOn(int n) { if (const int i = n - kFirstNote; i >= 0 && i <= kHold) note[(size_t) i] = true; }
-    void noteOff(int n) { if (const int i = n - kFirstNote; i >= 0 && i <= kHold) note[(size_t) i] = false; }
-    void allNotesOff() { note.fill(false); }
+    void noteOn(int n) { if (n >= 0 && n < 128) notes.set((size_t) n); }
+    void noteOff(int n) { if (n >= 0 && n < 128) notes.reset((size_t) n); }
+    void allNotesOff() { notes.reset(); }
 
     // Apply the edges since the last call. Call after every batch of setParam/note changes.
     void update() {
@@ -27,7 +30,10 @@ public:
         if (!hold && holdPrev) latched.fill(false);
         for (int i = 0; i < kEffects; ++i) {
             const bool p = pressed(i);
-            if (hold && holdPrev && p && !prev[(size_t) i]) latched[(size_t) i] = !latched[(size_t) i];
+            if (p && !prev[(size_t) i]) {
+                last = i;
+                if (hold && holdPrev) latched[(size_t) i] = !latched[(size_t) i];
+            }
             prev[(size_t) i] = p;
         }
         holdPrev = hold;
@@ -35,6 +41,7 @@ public:
 
     bool active(int i) const { return pressed(i) || latched[(size_t) i]; }
     bool holdOn() const { return holdPrev; }
+    int lastPressed() const { return last; }  // effect most recently pressed (0 until any press)
 
     // Bit i = effect i active, bit 11 = Hold.
     uint32_t mask() const {
@@ -44,11 +51,18 @@ public:
     }
 
 private:
-    bool pressed(int i) const { return param[(size_t) i] || note[(size_t) i]; }
+    bool pressed(int i) const {
+        if (param[(size_t) i]) return true;
+        if (i == kHold) return false;
+        for (size_t n = (size_t) i; n < 128; n += 12) if (notes[n]) return true;
+        return false;
+    }
 
-    std::array<bool, kHold + 1> param {}, note {};
+    std::array<bool, kHold + 1> param {};
+    std::bitset<128> notes;
     std::array<bool, kEffects> prev {}, latched {};
     bool holdPrev = false;
+    int last = 0;
 };
 
 }  // namespace dsp
