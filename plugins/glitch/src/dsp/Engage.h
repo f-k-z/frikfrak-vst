@@ -16,8 +16,9 @@ struct Engage {
     bool idle() const { return value <= 0.0f; }
 };
 
-// Linear dry/wet blend: e = 0 returns dry bit-exact.
-inline float blend(float dry, float wet, float e) { return e <= 0.0f ? dry : dry + e * (wet - dry); }
+// Linear blend a -> b: t <= 0 returns a and t >= 1 returns b bit-exact (also used for crossfades,
+// so equal inputs come out unchanged).
+inline float blend(float a, float b, float t) { return t <= 0.0f ? a : (t >= 1.0f ? b : a + t * (b - a)); }
 
 // 4-point, 3rd-order Hermite interpolation (Niemitalo); t = 0 returns y0 exactly.
 inline float hermite(float ym1, float y0, float y1, float y2, float t) {

@@ -7,6 +7,7 @@
 #include "dsp/Engage.h"
 #include "dsp/BeatClock.h"
 #include "dsp/Pads.h"
+#include "dsp/TimeFx.h"
 #include "Presets.h"
 #include "../plugins/kankyo/src/Presets.h"
 #include <set>
@@ -518,6 +519,115 @@ static void testGlitchBasics() {
     }
 }
 
+// ---------- Glitch: time effects ----------
+
+// Runs `fx(l, r, clock, ppq, i)` over a mono input (L = R), feeding the clock every 512 samples.
+template <class F>
+static Buf runClocked(double sr, double bpm, bool playing, const Buf& in, F fx, Buf* right = nullptr) {
+    dsp::BeatClock c; c.prepare(sr);
+    Buf out(in.size());
+    for (size_t i = 0; i < in.size(); ++i) {
+        const size_t k = i % 512;
+        if (k == 0) c.begin(512, true, bpm, playing, (double) i * bpm / (60.0 * sr), playing);
+        float l = in[i], r = in[i];
+        fx(l, r, c, c.ppqAt((int) k), i);
+        out[i] = l;
+        if (right) (*right)[i] = r;
+    }
+    return out;
+}
+static Buf ramp(size_t n) { Buf x(n); for (size_t i = 0; i < n; ++i) x[i] = (float) i * 1e-6f; return x; }
+static Buf noise(size_t n, uint32_t seed) { dsp::Rng g; g.s = seed; Buf x(n); for (auto& v : x) v = g.bipolar(); return x; }
+static int zeroCrossings(const Buf& x, size_t from, size_t n) {
+    int z = 0; for (size_t i = from + 1; i < from + n; ++i) if ((x[i - 1] < 0) != (x[i] < 0)) ++z;
+    return z;
+}
+
+static void testGlitchTime() {
+    const double sr = 48000;
+    {   // Stutter 1/16 at 120 BPM (6000 samples), pressed at 10000: slice [6000, 12000) repeats
+        for (bool playing : { true, false }) {
+            dsp::Stutter st; st.prepare(sr);
+            const Buf in = ramp(40000);
+            const Buf out = runClocked(sr, 120, playing, in, [&](float& l, float& r, auto& c, double ppq, size_t i) { st.process(l, r, i >= 10000, 0.25, c, ppq); });
+            CHECK(out[11000] == in[11000], "first pass is not live (%s)", playing ? "playing" : "stopped");
+            CHECK(std::fabs(out[12500] - in[6500]) < 1e-7f && std::fabs(out[18500] - in[6500]) < 1e-7f, "slice not repeated from the last boundary (%s)", playing ? "playing" : "stopped");
+            bool periodic = true;
+            for (size_t i = 12200; i < 17000; ++i) periodic = periodic && out[i + 6000] == out[i];
+            CHECK(periodic, "stutter period not 6000 samples (%s)", playing ? "playing" : "stopped");
+        }
+        dsp::Stutter st; st.prepare(sr);
+        const Buf in = sine(sr, 440, 1.5, 0.5f);
+        const Buf out = runClocked(sr, 120, true, in, [&](float& l, float& r, auto& c, double ppq, size_t i) { st.process(l, r, i >= 10000 && i < 60000, 0.25, c, ppq); });
+        CHECK(maxStep(out, 0, out.size()) < 0.05, "stutter seam step %.3f", maxStep(out, 0, out.size()));
+        CHECK(out[70000] == in[70000], "stutter not bypassed after release");
+    }
+    {   // Reverse 1/4 beat on a rising ramp: falling output; seams smooth on a sine
+        dsp::Reverse rv; rv.prepare(sr);
+        const Buf in = ramp(60000);
+        const Buf out = runClocked(sr, 120, true, in, [&](float& l, float& r, auto& c, double, size_t i) { rv.process(l, r, i >= 20000, 0.25, c); });
+        bool falling = true;
+        for (size_t i = 20400; i < 26000; ++i) falling = falling && out[i] < out[i - 1];
+        CHECK(falling, "reverse output not descending");
+        dsp::Reverse rs; rs.prepare(sr);
+        const Buf sn = sine(sr, 440, 1.5, 0.5f);
+        const Buf so = runClocked(sr, 120, true, sn, [&](float& l, float& r, auto& c, double, size_t i) { rs.process(l, r, i >= 20000 && i < 60000, 0.25, c); });
+        CHECK(maxStep(so, 0, so.size()) < 0.05, "reverse seam step %.3f", maxStep(so, 0, so.size()));
+    }
+    {   // Tape stop 1 beat: pitch falls monotonically, then silence; release returns to live without a jump
+        dsp::TapeStop ts; ts.prepare(sr);
+        const size_t t0 = 20000, rel = 60000;
+        const Buf in = sine(sr, 1000, 2.0, 0.5f);
+        const Buf out = runClocked(sr, 120, true, in, [&](float& l, float& r, auto& c, double, size_t i) { ts.process(l, r, i >= t0 && i < rel, 1.0, c); });
+        int z[4]; for (int w = 0; w < 4; ++w) z[w] = zeroCrossings(out, t0 + 400 + (size_t) w * 5000, 5000);
+        CHECK(z[0] > z[1] && z[1] > z[2] && z[2] > z[3], "tape stop pitch not falling %d %d %d %d", z[0], z[1], z[2], z[3]);
+        CHECK(rms(out, t0 + 25000, 10000) < 1e-3, "not silent once stopped (%.4f)", rms(out, t0 + 25000, 10000));
+        CHECK(maxStep(out, rel - 1000, 20000) <= 1.25 * maxStep(in, 0, 2000), "tape start step %.3f", maxStep(out, rel - 1000, 20000));  // 1 kHz sine: natural step 0.065
+        bool exact = true; for (size_t i = rel + 3000 + 400; i < out.size(); ++i) exact = exact && out[i] == in[i];
+        CHECK(exact, "tape stop not bypassed after tape start");
+    }
+    {   // Held 20 s (longer than the buffer), then released: no jump, back to the live input
+        dsp::TapeStop ts; ts.prepare(sr);
+        const size_t rel = (size_t) (21 * sr);
+        const Buf in = sine(sr, 300, 22.0, 0.5f);
+        const Buf out = runClocked(sr, 120, true, in, [&](float& l, float& r, auto& c, double, size_t i) { ts.process(l, r, i >= (size_t) sr && i < rel, 1.0, c); });
+        CHECK(maxStep(out, rel - 100, 8000) < 0.05, "long hold release step %.3f", maxStep(out, rel - 100, 8000));
+        bool exact = true; for (size_t i = rel + 3500; i < out.size(); ++i) exact = exact && out[i] == in[i];
+        CHECK(exact, "long hold: not back to live input");
+    }
+    {   // 20 BPM: lengths computed at 60 BPM, loops stay inside the buffer
+        dsp::Stutter st; st.prepare(sr);
+        const Buf in = ramp((size_t) (6 * sr));
+        const Buf out = runClocked(sr, 20, true, in, [&](float& l, float& r, auto& c, double ppq, size_t i) { st.process(l, r, i >= 1000, 2.0, c, ppq); });
+        bool periodic = true;  // 1/2 = 2 beats = 96000 samples at the 60 BPM floor
+        for (size_t i = 100000; i < 150000; ++i) periodic = periodic && out[i + 96000] == out[i];
+        CHECK(periodic, "stutter 1/2 at 20 BPM not looping on 96000 samples");
+        dsp::Reverse rv; rv.prepare(sr);
+        const Buf nz = noise((size_t) (20 * sr), 7);
+        const Buf ro = runClocked(sr, 20, true, nz, [&](float& l, float& r, auto& c, double, size_t i) { rv.process(l, r, i >= 1000, 4.0, c); });
+        CHECK(finiteAndBounded(ro, 1.01f), "reverse 1 bar at 20 BPM unbounded");
+    }
+    {   // Downer: depth 0 = bit-exact even when engaged; depth 1 = lower pitch late in each step
+        dsp::Downer dw; dw.prepare(sr);
+        const Buf in = sine(sr, 1000, 1.0, 0.5f);
+        Buf out = runClocked(sr, 120, true, in, [&](float& l, float& r, auto& c, double ppq, size_t) { dw.process(l, r, true, 1.0, 0.0f, c, ppq); });
+        CHECK(out == in, "downer depth 0 not bit-exact");
+        dsp::Downer d1; d1.prepare(sr);
+        out = runClocked(sr, 120, true, in, [&](float& l, float& r, auto& c, double ppq, size_t) { d1.process(l, r, true, 1.0, 1.0f, c, ppq); });
+        const int live = zeroCrossings(in, 24000 + 12000, 6000), dipped = zeroCrossings(out, 24000 + 12000, 6000);
+        CHECK(dipped < live * 0.8, "downer not pitching down (%d vs %d)", dipped, live);
+    }
+    {   // All four on loud noise with extreme settings, pads toggled: finite and bounded
+        const Buf in = noise((size_t) (10 * sr), 3);
+        dsp::Stutter a; a.prepare(sr); dsp::Reverse b; b.prepare(sr); dsp::TapeStop c2; c2.prepare(sr); dsp::Downer d; d.prepare(sr);
+        const Buf out = runClocked(sr, 174, true, in, [&](float& l, float& r, auto& c, double ppq, size_t i) {
+            const bool on = (i / 33600) % 2 == 0;
+            a.process(l, r, on, 0.125, c, ppq); b.process(l, r, !on, 4.0, c); c2.process(l, r, on, 0.125, c); d.process(l, r, true, 0.25, 1.0f, c, ppq);
+        });
+        CHECK(finiteAndBounded(out, 1.5f), "time effects unbounded on noise");  // Hermite may overshoot a little on white noise
+    }
+}
+
 int main() {
     testTine();
     testEffects();
@@ -527,6 +637,7 @@ int main() {
     testPad();
     testPresets();
     testGlitchBasics();
+    testGlitchTime();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all DSP tests passed\n");
     return 0;
