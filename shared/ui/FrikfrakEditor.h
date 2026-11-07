@@ -54,6 +54,52 @@ public:
     }
 };
 
+// One rotary knob bound to a parameter: name without the "(unit)" suffix, value box below.
+// Choice parameters show their label ("1/16T"); 0..1 ranges read as percent.
+struct Knob {
+    Knob(juce::AudioProcessorValueTreeState& apvts, juce::RangedAudioParameter& p, int textBoxW = 96)
+        : name(p.getName(40).upToFirstOccurrenceOf(" (", false, false)), attachment(apvts, p.getParameterID(), slider) {
+        const auto unitText = p.getName(40).fromFirstOccurrenceOf("(", false, false).upToFirstOccurrenceOf(")", false, false);  // "Volume (dB)" -> dB
+        // Set on the slider itself: its text box is built before the editor's LookAndFeel applies.
+        slider.setColour(juce::Slider::textBoxTextColourId, col::fgDim);
+        slider.setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+        slider.setColour(juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
+        slider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+        slider.setRepaintsOnMouseActivity(true);  // hover brightens the arc
+        slider.setTextBoxStyle(juce::Slider::TextBoxBelow, true, textBoxW, 22);
+        slider.setDoubleClickReturnValue(true, p.convertFrom0to1(p.getDefaultValue()));
+        if (auto* choice = dynamic_cast<juce::AudioParameterChoice*>(&p)) {
+            const auto labels = choice->choices;
+            slider.textFromValueFunction = [labels](double v) { return labels[juce::jlimit(0, labels.size() - 1, juce::roundToInt(v))]; };
+        } else {
+            const auto range = p.getNormalisableRange();
+            const bool unit = range.start == 0.0f && range.end == 1.0f;  // 0..1 params read as percent
+            slider.textFromValueFunction = [unit, unitText](double v) {
+                if (unit) return juce::String(juce::roundToInt(v * 100)) + " %";
+                return (juce::String(v, std::abs(v) < 10 ? 2 : 1) + " " + unitText).trimEnd();
+            };
+        }
+        slider.updateText();
+    }
+    juce::String name;
+    juce::Slider slider;
+    juce::AudioProcessorValueTreeState::SliderAttachment attachment;  // after slider: destroyed first
+};
+
+// Header left side: logo, "FRIKFRAK", product name. Returns the remaining area on the right.
+inline juce::Rectangle<int> drawBrand(juce::Graphics& g, juce::Rectangle<int> header, const juce::Drawable* logo, int headerH) {
+    if (logo) logo->drawWithin(g, header.removeFromLeft(34).withSizeKeepingCentre(34, 36).toFloat(), juce::RectanglePlacement::centred, 1.0f);
+    header.removeFromLeft(14);
+    const auto name = juce::String(JucePlugin_Name).fromFirstOccurrenceOf("Frikfrak ", false, false);
+    g.setColour(col::accent);
+    g.setFont(mono(10.0f).withExtraKerningFactor(0.25f));
+    g.drawText("FRIKFRAK", header.withTrimmedBottom(headerH / 2 + 2), juce::Justification::bottomLeft);
+    g.setColour(col::fg);
+    g.setFont(serif(26.0f));
+    g.drawText(name, header.withTrimmedTop(headerH / 2 - 4), juce::Justification::topLeft);
+    return header;
+}
+
 class Editor : public juce::AudioProcessorEditor {
 public:
     Editor(juce::AudioProcessor& p, juce::AudioProcessorValueTreeState& apvts, juce::String taglineText)
@@ -63,7 +109,7 @@ public:
 
         for (auto* param : p.getParameters())
             if (auto* rp = dynamic_cast<juce::RangedAudioParameter*>(param)) {
-                auto& k = *knobs.emplace_back(std::make_unique<Knob>(apvts, *rp));
+                auto& k = *knobs.emplace_back(std::make_unique<Knob>(apvts, *rp, kCellW - 8));
                 addAndMakeVisible(k.slider);
             }
         if (p.getNumPrograms() > 1) {  // factory presets menu
@@ -90,16 +136,7 @@ public:
         g.fillAll(col::bg);
 
         // Header: logo, brand, product name, tagline
-        auto header = getLocalBounds().removeFromTop(kHeaderH).reduced(kPad, 0);
-        if (logo) logo->drawWithin(g, header.removeFromLeft(34).withSizeKeepingCentre(34, 36).toFloat(), juce::RectanglePlacement::centred, 1.0f);
-        header.removeFromLeft(14);
-        const auto name = juce::String(JucePlugin_Name).fromFirstOccurrenceOf("Frikfrak ", false, false);
-        g.setColour(col::accent);
-        g.setFont(mono(10.0f).withExtraKerningFactor(0.25f));
-        g.drawText("FRIKFRAK", header.withTrimmedBottom(kHeaderH / 2 + 2), juce::Justification::bottomLeft);
-        g.setColour(col::fg);
-        g.setFont(serif(26.0f));
-        g.drawText(name, header.withTrimmedTop(kHeaderH / 2 - 4), juce::Justification::topLeft);
+        const auto header = drawBrand(g, getLocalBounds().removeFromTop(kHeaderH).reduced(kPad, 0), logo.get(), kHeaderH);
         if (presets.isVisible()) {
             g.setColour(col::fgMute);
             g.setFont(mono(10.0f).withExtraKerningFactor(0.25f));
@@ -131,31 +168,6 @@ public:
 
 private:
     static constexpr int kHeaderH = 72, kPad = 20, kCardPad = 14, kCellW = 104, kNameH = 28, kCellH = kNameH + 6 + 78 + 22, kMaxCols = 8;  // wrap to a new row after 8 knobs
-
-    struct Knob {
-        Knob(juce::AudioProcessorValueTreeState& apvts, juce::RangedAudioParameter& p)
-            : name(p.getName(40).upToFirstOccurrenceOf(" (", false, false)), attachment(apvts, p.getParameterID(), slider) {
-            const auto unitText = p.getName(40).fromFirstOccurrenceOf("(", false, false).upToFirstOccurrenceOf(")", false, false);  // "Volume (dB)" -> dB
-            // Set on the slider itself: its text box is built before the editor's LookAndFeel applies.
-            slider.setColour(juce::Slider::textBoxTextColourId, col::fgDim);
-            slider.setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
-            slider.setColour(juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
-            slider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-            slider.setRepaintsOnMouseActivity(true);  // hover brightens the arc
-            slider.setTextBoxStyle(juce::Slider::TextBoxBelow, true, kCellW - 8, 22);
-            slider.setDoubleClickReturnValue(true, p.convertFrom0to1(p.getDefaultValue()));
-            const auto range = p.getNormalisableRange();
-            const bool unit = range.start == 0.0f && range.end == 1.0f;  // 0..1 params read as percent
-            slider.textFromValueFunction = [unit, unitText](double v) {
-                if (unit) return juce::String(juce::roundToInt(v * 100)) + " %";
-                return (juce::String(v, std::abs(v) < 10 ? 2 : 1) + " " + unitText).trimEnd();
-            };
-            slider.updateText();
-        }
-        juce::String name;
-        juce::Slider slider;
-        juce::AudioProcessorValueTreeState::SliderAttachment attachment;  // after slider: destroyed first
-    };
 
     juce::Rectangle<int> cardBounds() const { return getLocalBounds().withTrimmedTop(kHeaderH).reduced(kPad); }
     juce::Rectangle<int> cell(size_t i) const {

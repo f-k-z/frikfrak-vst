@@ -1,4 +1,5 @@
 #include "PluginProcessor.h"
+#include "GlitchEditor.h"
 
 namespace {
 juce::AudioProcessorValueTreeState::ParameterLayout createLayout() {
@@ -26,7 +27,7 @@ bool GlitchProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const {
     return layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo() && layouts.getMainInputChannelSet() == juce::AudioChannelSet::stereo();
 }
 
-juce::AudioProcessorEditor* GlitchProcessor::createEditor() { return new ui::Editor(*this, params, "Hold a pad, play the mix"); }
+juce::AudioProcessorEditor* GlitchProcessor::createEditor() { return new glitch::GlitchEditor(*this); }
 
 void GlitchProcessor::prepareToPlay(double sampleRate, int) {
     setLatencySamples(0);  // on the Main track any declared latency would delay everything, pads off or not
