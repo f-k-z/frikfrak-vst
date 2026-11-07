@@ -2,6 +2,9 @@
 #include "dsp/Effects.h"
 #include "dsp/RhodesTine.h"
 #include "dsp/Vinyl.h"
+#include "Presets.h"
+#include <set>
+#include <string>
 #include <cmath>
 #include <cstdio>
 #include <vector>
@@ -179,16 +182,91 @@ static void testVinyl() {
         }
     CHECK(maxDev > 0.001 && maxDev < 0.005, "wow deviation=%.4f", maxDev);
 
+    // Gate: no crackle/hiss while no key is held; noise dies out after release
+    v.prepare(sr, 5);
+    dsp::Vinyl::Params gt; gt.crackle = gt.hiss = 1; gt.gate = false;
+    y = runVinyl(v, gt, Buf((size_t) sr, 0.0f));
+    CHECK(rms(y, 0, y.size()) < 1e-6 && v.crackleCount == 0, "gate closed but noise: rms=%g clicks=%ld", rms(y, 0, y.size()), v.crackleCount);
+    gt.gate = true;
+    y = runVinyl(v, gt, Buf((size_t) sr, 0.0f));
+    CHECK(rms(y, 4800, y.size() - 4800) > 1e-4, "gate open but silent");
+    gt.gate = false;
+    y = runVinyl(v, gt, Buf((size_t) (2 * sr), 0.0f));
+    CHECK(rms(y, (size_t) sr, (size_t) sr) < 1e-5, "noise not released: rms=%g", rms(y, (size_t) sr, (size_t) sr));
+
+    // Age darkens the noise itself (instrument mode: no input, noise only)
+    auto hissAt = [&](float age) {
+        v.prepare(sr, 9);
+        dsp::Vinyl::Params h; h.hiss = 1; h.age = age;
+        auto o = runVinyl(v, h, Buf((size_t) sr, 0.0f));
+        Buf d(o.size() - 1); for (size_t i = 1; i < o.size(); ++i) d[i - 1] = o[i] - o[i - 1];  // first difference ~ treble
+        return rms(d, 4800, d.size() - 4800);
+    };
+    CHECK(hissAt(1) < 0.7 * hissAt(0), "age does not darken noise: %g vs %g", hissAt(1), hissAt(0));
+
     // Everything maxed on a full-scale input: finite and bounded
     v.prepare(sr, 3);
     dsp::Vinyl::Params mx; mx.crackle = mx.hiss = mx.wow = mx.age = 1;
     CHECK(finiteAndBounded(runVinyl(v, mx, sine(sr, 100, 3.0, 1.0f)), 2.0f), "vinyl max unbounded");
 }
 
+static void testToneAndPhaser() {
+    const double sr = 48000;
+    auto thru = [&](auto& fx, float amt, const Buf& in) {
+        Buf out(in.size());
+        for (size_t i = 0; i < in.size(); ++i) { float l = in[i], r = in[i]; fx.process(l, r, amt); out[i] = l; }
+        return out;
+    };
+    auto gainDb = [&](float tone, double f) {
+        dsp::Tone t; t.prepare(sr, tone);
+        auto s = sine(sr, f, 0.5, 0.5f);
+        auto y = thru(t, tone, s);
+        return 20 * std::log10(rms(y, 4800, 14400) / rms(s, 4800, 14400));
+    };
+    CHECK(std::fabs(gainDb(1, 1000)) < 0.5 && std::fabs(gainDb(1, 5000)) < 0.5, "tone=1 not transparent: %.2f / %.2f dB", gainDb(1, 1000), gainDb(1, 5000));
+    CHECK(gainDb(0, 5000) < -12, "tone=0 5 kHz only %.1f dB", gainDb(0, 5000));
+    CHECK(gainDb(0, 200) > -3, "tone=0 cuts lows: %.1f dB", gainDb(0, 200));
+
+    dsp::Phaser ph; ph.prepare(sr, 0.0f);
+    auto s = sine(sr, 1000, 4.0, 0.5f);
+    auto y = thru(ph, 0.0f, s);
+    CHECK(y == s, "phaser=0 not an exact bypass");
+
+    ph.prepare(sr, 1.0f);
+    y = thru(ph, 1.0f, s);
+    double lo = 1e9, hi = 0;
+    for (size_t w = 4800; w + 2400 <= y.size(); w += 2400) { const double v = rms(y, w, 2400); lo = std::min(lo, v); hi = std::max(hi, v); }
+    CHECK(20 * std::log10(hi / lo) > 6, "phaser notches do not sweep: %.1f dB", 20 * std::log10(hi / lo));
+
+    dsp::Tone t; t.prepare(sr, 0.0f);
+    ph.prepare(sr, 1.0f);
+    auto big = sine(sr, 100, 2.0, 1.0f);
+    CHECK(finiteAndBounded(thru(ph, 1.0f, thru(t, 0.0f, big)), 2.0f), "tone/phaser unbounded");
+}
+
+static void testPresets() {
+    const auto& P = rhodes::kPresets;
+    CHECK(P.size() >= 10 && P.size() <= 14, "preset count %zu", P.size());
+    std::set<std::string> names;
+    for (const auto& p : P) {
+        CHECK(p.name && *p.name, "empty preset name");
+        names.insert(p.name);
+        for (size_t k = 0; k < rhodes::kParams.size(); ++k) {
+            const auto& s = rhodes::kParams[k];
+            CHECK(p.v[k] >= s.min && p.v[k] <= s.max, "%s: %s=%g outside [%g, %g]", p.name, s.id, p.v[k], s.min, s.max);
+        }
+    }
+    CHECK(names.size() == P.size(), "duplicate preset names");
+    for (size_t k = 0; k < rhodes::kParams.size(); ++k)
+        CHECK(P[0].v[k] == rhodes::kParams[k].def, "Init %s=%g != default %g", rhodes::kParams[k].id, P[0].v[k], rhodes::kParams[k].def);
+}
+
 int main() {
     testTine();
     testEffects();
     testVinyl();
+    testToneAndPhaser();
+    testPresets();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all DSP tests passed\n");
     return 0;

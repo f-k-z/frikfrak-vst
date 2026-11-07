@@ -9,10 +9,10 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release   # 1er configure : télécharge JUCE 
 cmake --build build -j                      # installe aussi dans ~/Library/Audio/Plug-Ins/{VST3,Components}
 ctest --test-dir build                      # tests DSP (exécutable dsp_tests)
 auval -v aumu Rhdx Frik                     # valider l'AU Rhodes
-auval -v aufx Vnzx Frik                     # valider l'AU Vinyl Noise
+auval -v aumu Vnzx Frik                     # valider l'AU Vinyl Noise
 ```
 
-Après un rebuild, si l'AU n'est pas à jour : `killall -9 AudioComponentRegistrar`.
+Après un rebuild : relancer Live (un plugin déjà chargé reste en mémoire), et si l'AU n'est pas à jour : `killall -9 AudioComponentRegistrar`.
 
 ## Architecture
 
@@ -20,7 +20,10 @@ Après un rebuild, si l'AU n'est pas à jour : `killall -9 AudioComponentRegistr
 - `shared/dsp/Effects.h` : DSP commun header-only (`Smoother`, `DcBlocker`, `Rng`, drive, trémolo), namespace `dsp`.
 - `plugins/<nom>/` : `CMakeLists.txt` (`juce_add_plugin` + `frikfrak_plugin_setup`) et `src/`.
   - `src/dsp/*.h` : DSP **pur C++, sans JUCE** (testable hors plugin).
-  - `src/PluginProcessor.*` : glue JUCE (APVTS, bus, état). Pas d'UI custom : `GenericAudioProcessorEditor`.
+  - `src/PluginProcessor.*` : glue JUCE (APVTS, bus, état). UI : `ui::Editor` partagé.
+- `shared/ui/FrikfrakEditor.h` : éditeur commun (palette du site fgillet, logo, un potard rotatif par paramètre, automatiquement). Unité affichée = texte entre parenthèses du nom de paramètre (`"Volume (dB)"`) ; plage 0..1 → affichée en %.
+- `plugins/rhodes/src/Presets.h` : specs des paramètres du Rhodes (id, bornes, défaut, ordre des potards) et presets d'usine, C++ pur ; `createLayout()` et les tests lisent cette table. Ajouter un preset = une ligne ; un paramètre = une spec + une colonne dans chaque preset.
+- `shared/assets/logo.svg` : embarqué via `juce_add_binary_data` (`BinaryData::logo_svg`).
 - `tests/dsp_tests.cpp` : tests de propriétés sur le DSP pur (macro `CHECK`, pas `assert`, pour tourner en Release).
 - `docs/plans/` : plans de conception.
 
@@ -31,4 +34,5 @@ Après un rebuild, si l'AU n'est pas à jour : `killall -9 AudioComponentRegistr
 - Nouveau plugin : copier `plugins/vinyl-noise/`, `PLUGIN_CODE` unique (4 caractères, une seule majuscule), `add_subdirectory(plugins/<nom>)` à la racine.
 - Temps réel : pas d'allocation, de lock ni d'I/O dans `processBlock` ; `juce::ScopedNoDenormals` en tête ; lisser les paramètres (`dsp::Smoother`).
 - Si un plugin introduit de la latence, la déclarer via `setLatencySamples()` dans `prepareToPlay`.
+- Git : commits signés **f-k-z** uniquement (identité locale au dépôt, déjà configurée). Aucun trailer `Co-Authored-By`, aucune mention de Claude dans les commits ni les PR.
 - C++20, arm64, macOS 11+. Documentation et README en français, commentaires de code en anglais.

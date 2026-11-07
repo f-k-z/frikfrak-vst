@@ -14,13 +14,15 @@ FetchContent_Declare(juce
     GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(juce)
 
+juce_add_binary_data(FrikfrakAssets SOURCES shared/assets/logo.svg)  # -> BinaryData::logo_svg
+
 # Common setup for every plugin target in plugins/*
 function(frikfrak_plugin_setup target)
     target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/shared)
     target_compile_definitions(${target} PUBLIC
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
     target_link_libraries(${target}
-        PRIVATE juce::juce_audio_utils
+        PRIVATE juce::juce_audio_utils FrikfrakAssets
         PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_lto_flags juce::juce_recommended_warning_flags)
 endfunction()
 

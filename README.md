@@ -4,14 +4,15 @@ Plugins audio maison (VST3 / AU, macOS Apple Silicon), pensés pour Ableton Live
 
 | Plugin | Type | Description |
 |---|---|---|
-| **Frikfrak Rhodes** | Instrument | Piano électrique façon Rhodes Mark I des années 70, synthétisé (pas d'échantillons), avec drive et trémolo |
-| **Frikfrak Vinyl Noise** | Effet audio | Grain de disque : craquements, souffle, pleurage/scintillement, perte de bande passante |
+| **Frikfrak Rhodes** | Instrument | Piano électrique façon Rhodes Mark I des années 70, synthétisé (pas d'échantillons), avec tone, drive, phaser, trémolo et 12 presets nu soul |
+| **Frikfrak Vinyl Noise** | Instrument | Grain de disque joué au clavier : craquements et souffle tant qu'une touche est enfoncée |
 
 ## Organisation
 
 ```text
 CMakeLists.txt          # récupère JUCE une fois, déclare chaque plugin
 shared/dsp/             # DSP commun (lissage, DC blocker, RNG, drive, trémolo)
+shared/ui/              # interface commune à tous les plugins (+ shared/assets/logo.svg)
 plugins/<nom>/          # un dossier par plugin : CMakeLists.txt + src/ (+ src/dsp/ pur C++)
 tests/dsp_tests.cpp     # tests du DSP pur C++ (sans JUCE)
 ```
@@ -34,7 +35,8 @@ Le build installe tous les plugins dans `~/Library/Audio/Plug-Ins/VST3/` et `~/L
 
 1. Settings → Plug-Ins : activer **Use Audio Units v2** et **Use VST3 Plug-In System Folders**.
 2. Cliquer **Rescan** (Option-clic pour un rescan complet).
-3. Browser → Plug-ins → *Frikfrak* : *Frikfrak Rhodes* sur une piste MIDI, *Frikfrak Vinyl Noise* sur n'importe quelle piste ou bus.
+3. Browser → Plug-ins → *Frikfrak* : *Frikfrak Rhodes* sur une piste MIDI, *Frikfrak Vinyl Noise* sur une autre piste MIDI.
+4. Après un rebuild, **quitter et relancer Live** : un plugin déjà chargé garde l'ancien code en mémoire, même après un Rescan.
 
 ## Paramètres
 
@@ -44,26 +46,44 @@ Le build installe tous les plugins dans `~/Library/Audio/Plug-Ins/VST3/` et `~/L
 |---|---|
 | Bark | Saturation du micro : plus haut = plus de « grognement » quand on joue fort |
 | Decay | Durée de résonance des notes (prise en compte à la note suivante) |
-| Volume | Niveau de sortie |
+| Tone | Brillance : 100 % = son d'origine, vers 0 % = Rhodes feutré et sombre |
 | Drive | Saturation douce globale |
+| Phaser | Phasing lent façon Phase 90 / Small Stone (vitesse fixe ~0,5 Hz) |
 | Tremolo Rate / Depth | Trémolo d'ampli, légèrement stéréo |
+| Volume | Niveau de sortie |
 
-**Frikfrak Vinyl Noise** (latence fixe de 1,5 ms, compensée par Live)
+Presets (menu en haut à droite de l'interface, aussi dans la liste de programmes de l'hôte) : interprétations à l'oreille de sons nu soul, pas des réglages documentés.
+
+| Preset | Inspiration |
+|---|---|
+| Init | Réglages par défaut |
+| Smoke Room | D'Angelo, *Untitled (How Does It Feel)* |
+| Chicken Grease | D'Angelo, *Voodoo* |
+| Brown Sugar | D'Angelo, *Brown Sugar* |
+| Mama's Phase | Erykah Badu, *Mama's Gun* |
+| Water for Chocolate | Common, *Like Water for Chocolate* |
+| Detroit Dust | J Dilla / Slum Village |
+| Black Radio | Robert Glasper, *Black Radio* |
+| Suitcase Pan | Rhodes Suitcase stéréo des années 70 |
+| Velvet Bark | Comping funk joué fort |
+| Slow Swirl | Rhodes + phaser profond |
+| Felt Dream | Slow jam très sombre |
+
+**Frikfrak Vinyl Noise**
 
 | Paramètre | Effet |
 |---|---|
 | Crackle | Craquements et petits pops |
 | Hiss | Souffle |
-| Wow / Flutter | Pleurage lent et scintillement de hauteur |
-| Age | Perte d'aigus (16 kHz → 6 kHz) |
+| Age | Assombrit le bruit (16 kHz → 6 kHz) |
 
-Les craquements et le souffle continuent même sur un signal silencieux : le disque tourne.
+Les craquements et le souffle ne sonnent que tant qu'une touche est enfoncée (attaque 5 ms, extinction ~150 ms au relâchement). La note jouée n'a pas d'importance.
 
 ## Validation
 
 ```sh
 auval -v aumu Rhdx Frik   # Rhodes
-auval -v aufx Vnzx Frik   # Vinyl Noise
+auval -v aumu Vnzx Frik   # Vinyl Noise
 # pluginval : télécharger la release macOS sur https://github.com/Tracktion/pluginval/releases
 pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --skip-gui-tests --validate ~/Library/Audio/Plug-Ins/VST3/"Frikfrak Rhodes.vst3"
 ```

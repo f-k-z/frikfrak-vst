@@ -8,35 +8,45 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout() {
     juce::AudioProcessorValueTreeState::ParameterLayout l;
     l.add(pct("crackle", "Crackle", 0.3f));
     l.add(pct("hiss", "Hiss", 0.3f));
-    l.add(pct("wow", "Wow / Flutter", 0.3f));
     l.add(pct("age", "Age", 0.4f));
     return l;
 }
 }  // namespace
 
 VinylNoiseProcessor::VinylNoiseProcessor()
-    : AudioProcessor(BusesProperties()
-                         .withInput("Input", juce::AudioChannelSet::stereo(), true)
-                         .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
+    : AudioProcessor(BusesProperties().withOutput("Output", juce::AudioChannelSet::stereo(), true)),
       params(*this, nullptr, "params", createLayout()) {}
 
 bool VinylNoiseProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const {
-    return layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo()
-        && layouts.getMainInputChannelSet() == juce::AudioChannelSet::stereo();
+    return layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo();
 }
 
 void VinylNoiseProcessor::prepareToPlay(double sampleRate, int) {
     vinyl.prepare(sampleRate);
-    setLatencySamples(vinyl.latencySamples());
+    held.fill(false);
+    heldNotes = 0;
 }
 
-void VinylNoiseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) {
+void VinylNoiseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) {
     juce::ScopedNoDenormals noDenormals;
-    const dsp::Vinyl::Params vp { get("crackle"), get("hiss"), get("wow"), get("age"), true };
+    buffer.clear();  // instrument: no input, the noise is the whole sound
+    dsp::Vinyl::Params vp { get("crackle"), get("hiss"), 0.0f, get("age"), true };
     auto* l = buffer.getWritePointer(0);
     auto* r = buffer.getWritePointer(1);
-    for (int i = 0; i < buffer.getNumSamples(); ++i)
-        vinyl.process(l[i], r[i], vp);
+    int i = 0;
+    auto renderTo = [&](int end) {
+        vp.gate = heldNotes > 0;
+        for (; i < end; ++i) vinyl.process(l[i], r[i], vp);
+    };
+    for (const auto meta : midi) {  // sample-accurate gate
+        renderTo(meta.samplePosition);
+        const auto m = meta.getMessage();
+        auto& h = held[(size_t) m.getNoteNumber()];
+        if (m.isNoteOn()) { if (!h) { h = true; ++heldNotes; } }
+        else if (m.isNoteOff()) { if (h) { h = false; --heldNotes; } }
+        else if (m.isAllNotesOff() || m.isAllSoundOff()) { held.fill(false); heldNotes = 0; }
+    }
+    renderTo(buffer.getNumSamples());
 }
 
 void VinylNoiseProcessor::getStateInformation(juce::MemoryBlock& dest) {

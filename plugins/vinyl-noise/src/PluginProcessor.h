@@ -1,5 +1,6 @@
 #pragma once
 #include "dsp/Vinyl.h"
+#include "ui/FrikfrakEditor.h"
 #include <juce_audio_utils/juce_audio_utils.h>
 
 class VinylNoiseProcessor : public juce::AudioProcessor {
@@ -11,15 +12,14 @@ public:
     bool isBusesLayoutSupported(const BusesLayout&) const override;
     void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
-    juce::AudioProcessorEditor* createEditor() override { return new juce::GenericAudioProcessorEditor(*this); }
+    juce::AudioProcessorEditor* createEditor() override { return new ui::Editor(*this, params, "Keys drop the needle"); }
     bool hasEditor() const override { return true; }
 
     const juce::String getName() const override { return JucePlugin_Name; }
-    bool acceptsMidi() const override { return false; }
+    bool acceptsMidi() const override { return true; }  // MIDI keys gate crackle/hiss
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
-    // The record keeps spinning (crackle/hiss) on silent input.
-    double getTailLengthSeconds() const override { return std::numeric_limits<double>::infinity(); }
+    double getTailLengthSeconds() const override { return 0.5; }  // gate release + crackle ring-out
 
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
@@ -36,6 +36,8 @@ private:
     float get(const char* id) const { return params.getRawParameterValue(id)->load(); }
 
     dsp::Vinyl vinyl;
+    std::array<bool, 128> held {};
+    int heldNotes = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(VinylNoiseProcessor)
 };

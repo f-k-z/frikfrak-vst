@@ -6,11 +6,12 @@
 
 namespace dsp {
 
-// Record-player stage: wow/flutter (modulated delay) -> HP 40 Hz -> LP "age" -> + crackle + hiss.
+// Record-player stage: wow/flutter (modulated delay) + crackle + hiss -> HP 40 Hz -> LP "age".
 // Fixed latency of ~1.5 ms is kept even when bypassed, so toggling never shifts timing.
 class Vinyl {
 public:
-    struct Params { float crackle = 0, hiss = 0, wow = 0, age = 0; bool on = true; };
+    // gate: crackle/hiss only sound while true (MIDI key held); wow/age always process the input.
+    struct Params { float crackle = 0, hiss = 0, wow = 0, age = 0; bool on = true, gate = true; };
 
     void prepare(double sampleRate, uint32_t seed = 0x12345678u) {
         sr = sampleRate;
@@ -35,6 +36,9 @@ public:
         wowS.prepare(sr, 0.0f, 0.05f);
         ageS.prepare(sr, 0.0f, 0.05f);
         crackleCount = 0;
+        noiseEnv = 0.0f;
+        envAtk = 1.0f - std::exp(-1.0f / (0.005f * (float) sr));
+        envRel = 1.0f - std::exp(-1.0f / (0.15f * (float) sr));
     }
 
     int latencySamples() const { return latency; }
@@ -58,10 +62,28 @@ public:
         wowPhase = wrap(wowPhase + kTwoPi * kWowHz / (float) sr);
         flutterPhase = wrap(flutterPhase + kTwoPi * kFlutterHz / (float) sr);
 
+        const float target = p.gate ? 1.0f : 0.0f;
+        noiseEnv += (target > noiseEnv ? envAtk : envRel) * (target - noiseEnv);
+
+        // Crackle: Poisson clicks, occasional loud pop, through a resonator. Centered (mono).
+        float imp = 0.0f;
+        if (p.crackle > 0.0f && noiseEnv > 1e-3f && rng.uniform() < 30.0f * p.crackle / (float) sr) {
+            ++crackleCount;
+            const float a = rng.uniform() < 0.05f ? 0.8f : 0.3f * std::pow(rng.uniform(), 3.0f);
+            imp = (rng.uniform() < 0.5f ? -a : a) * p.crackle * noiseEnv;
+        }
+        const float cr = bb0 * imp + bb2 * cx2 - ba1 * cy1 - ba2 * cy2;  // direct form I (b1 = 0)
+        cx2 = cx1; cx1 = imp; cy2 = cy1; cy1 = cr;
+        // hiss (-55 dBFS RMS at hiss=1), independent per channel
+        const float hl = (hissL += hissA * (rng.bipolar() - hissL)) * hissNorm;
+        const float hr = (hissR += hissA * (rng.bipolar() - hissR)) * hissNorm;
+        const float hissGain = p.hiss * kHissRms * noiseEnv;
+        const float noise[2] = { cr + hl * hissGain, cr + hr * hissGain };
+
         const float lpA = onePoleCoeff(16000.0f * std::pow(6000.0f / 16000.0f, age));
         float* ch[2] = { &l, &r };
         for (int c = 0; c < 2; ++c) {
-            float x = readFrac(c, delay);
+            const float x = readFrac(c, delay) + noise[c];  // noise goes through the age filter too
             const float hp = x - hpX[c] + hpR * hpY[c];  // 1-pole HP 40 Hz
             hpX[c] = x; hpY[c] = hp;
             lp1[c] += lpA * (hp - lp1[c]);  // 2 x 1-pole LP
@@ -69,21 +91,6 @@ public:
             *ch[c] = lp2[c];
         }
 
-        // Crackle: Poisson clicks, occasional loud pop, through a resonator. Centered (mono).
-        float imp = 0.0f;
-        if (p.crackle > 0.0f && rng.uniform() < 30.0f * p.crackle / (float) sr) {
-            ++crackleCount;
-            const float a = rng.uniform() < 0.05f ? 0.8f : 0.3f * std::pow(rng.uniform(), 3.0f);
-            imp = (rng.uniform() < 0.5f ? -a : a) * p.crackle;
-        }
-        const float cr = bb0 * imp + bb2 * cx2 - ba1 * cy1 - ba2 * cy2;  // direct form I (b1 = 0)
-        cx2 = cx1; cx1 = imp; cy2 = cy1; cy1 = cr;
-        // hiss (-55 dBFS RMS at hiss=1), independent per channel
-        const float hl = (hissL += hissA * (rng.bipolar() - hissL)) * hissNorm;
-        const float hr = (hissR += hissA * (rng.bipolar() - hissR)) * hissNorm;
-        const float hissGain = p.hiss * kHissRms;
-        l += cr + hl * hissGain;
-        r += cr + hr * hissGain;
         advance();
     }
 
@@ -113,6 +120,7 @@ private:
     Smoother wowS, ageS;
     float wowPhase = 0, flutterPhase = 0, hpR = 0.99f, hpX[2] {}, hpY[2] {}, lp1[2] {}, lp2[2] {};
     float hissA = 0.5f, hissNorm = 1.0f, hissL = 0, hissR = 0;
+    float noiseEnv = 0, envAtk = 1, envRel = 1;
     float bb0 = 0, bb2 = 0, ba1 = 0, ba2 = 0, cx1 = 0, cx2 = 0, cy1 = 0, cy2 = 0;
 };
 

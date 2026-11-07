@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "RhodesVoice.h"
+#include "Presets.h"
 
 namespace {
 constexpr int kVoices = 32;  // generous so JUCE's hard voice-steal stays rare with the pedal down
@@ -14,19 +15,25 @@ RhodesProcessor::RhodesProcessor()
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout RhodesProcessor::createLayout() {
-    using P = juce::AudioParameterFloat;
-    using R = juce::NormalisableRange<float>;
-    auto pct = [](const char* id, const char* name, float def) {
-        return std::make_unique<P>(juce::ParameterID { id, 1 }, name, R(0.0f, 1.0f), def);
-    };
     juce::AudioProcessorValueTreeState::ParameterLayout l;
-    l.add(pct("bark", "Bark", 0.5f));
-    l.add(std::make_unique<P>(juce::ParameterID { "decay", 1 }, "Decay", R(0.25f, 2.0f), 1.0f));
-    l.add(std::make_unique<P>(juce::ParameterID { "volume", 1 }, "Volume (dB)", R(-24.0f, 6.0f), -6.0f));
-    l.add(pct("drive", "Drive", 0.2f));
-    l.add(std::make_unique<P>(juce::ParameterID { "tremRate", 1 }, "Tremolo Rate (Hz)", R(0.5f, 10.0f), 4.5f));
-    l.add(pct("tremDepth", "Tremolo Depth", 0.3f));
+    for (const auto& p : rhodes::kParams)
+        l.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID { p.id, 1 }, p.name, juce::NormalisableRange<float>(p.min, p.max), p.def));
     return l;
+}
+
+int RhodesProcessor::getNumPrograms() { return (int) rhodes::kPresets.size(); }
+
+const juce::String RhodesProcessor::getProgramName(int i) {
+    return juce::isPositiveAndBelow(i, (int) rhodes::kPresets.size()) ? juce::String::fromUTF8(rhodes::kPresets[(size_t) i].name) : juce::String();
+}
+
+void RhodesProcessor::setCurrentProgram(int i) {
+    if (!juce::isPositiveAndBelow(i, (int) rhodes::kPresets.size())) return;
+    const auto& preset = rhodes::kPresets[(size_t) i];
+    for (size_t k = 0; k < rhodes::kParams.size(); ++k)
+        if (auto* p = params.getParameter(rhodes::kParams[k].id))
+            p->setValueNotifyingHost(p->convertTo0to1(preset.v[k]));
+    program = i;
 }
 
 bool RhodesProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const {
@@ -39,6 +46,8 @@ void RhodesProcessor::prepareToPlay(double sampleRate, int) {
     driveS.prepare(sampleRate, get("drive"));
     depthS.prepare(sampleRate, get("tremDepth"));
     tremolo.prepare(sampleRate);
+    tone.prepare(sampleRate, get("tone"));
+    phaser.prepare(sampleRate, get("phaser"));
 }
 
 void RhodesProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) {
@@ -47,13 +56,15 @@ void RhodesProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     synth.renderNextBlock(buffer, midi, 0, buffer.getNumSamples());
 
     const float volume = juce::Decibels::decibelsToGain(get("volume")), drive = get("drive");
-    const float rate = get("tremRate"), depth = get("tremDepth");
+    const float rate = get("tremRate"), depth = get("tremDepth"), toneV = get("tone"), phaserV = get("phaser");
 
     auto* l = buffer.getWritePointer(0);
     auto* r = buffer.getWritePointer(1);
     for (int i = 0; i < buffer.getNumSamples(); ++i) {
         const float d = driveS.next(drive), g = volumeS.next(volume);
         float a = dsp::drive(l[i], d) * g, b = dsp::drive(r[i], d) * g;
+        tone.process(a, b, toneV);
+        phaser.process(a, b, phaserV);
         tremolo.process(a, b, rate, depthS.next(depth));
         l[i] = juce::jlimit(-1.0f, 1.0f, a);  // hard safety ceiling, never reached at sane settings
         r[i] = juce::jlimit(-1.0f, 1.0f, b);
@@ -61,12 +72,17 @@ void RhodesProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 }
 
 void RhodesProcessor::getStateInformation(juce::MemoryBlock& dest) {
-    if (auto xml = params.copyState().createXml()) copyXmlToBinary(*xml, dest);
+    auto state = params.copyState();
+    state.setProperty("program", program.load(), nullptr);
+    if (auto xml = state.createXml()) copyXmlToBinary(*xml, dest);
 }
 
 void RhodesProcessor::setStateInformation(const void* data, int size) {
-    if (auto xml = getXmlFromBinary(data, size); xml && xml->hasTagName(params.state.getType()))
-        params.replaceState(juce::ValueTree::fromXml(*xml));
+    if (auto xml = getXmlFromBinary(data, size); xml && xml->hasTagName(params.state.getType())) {
+        const auto state = juce::ValueTree::fromXml(*xml);
+        program = (int) state.getProperty("program", 0);
+        params.replaceState(state);
+    }
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new RhodesProcessor(); }
