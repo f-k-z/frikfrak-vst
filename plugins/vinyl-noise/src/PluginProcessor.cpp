@@ -36,14 +36,23 @@ void VinylNoiseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
     int i = 0;
     auto renderTo = [&](int end) {
         vp.gate = heldNotes > 0;
+        vp.pitch = std::exp2((float) (note - 60) / 12.0f);  // C4 = reference colour, 1 octave = x2
+        vp.level = velocity;
         for (; i < end; ++i) vinyl.process(l[i], r[i], vp);
     };
     for (const auto meta : midi) {  // sample-accurate gate
         renderTo(meta.samplePosition);
         const auto m = meta.getMessage();
         auto& h = held[(size_t) m.getNoteNumber()];
-        if (m.isNoteOn()) { if (!h) { h = true; ++heldNotes; } }
-        else if (m.isNoteOff()) { if (h) { h = false; --heldNotes; } }
+        if (m.isNoteOn()) {
+            if (!h) { h = true; ++heldNotes; }
+            note = m.getNoteNumber();  // last note wins
+            velocity = m.getFloatVelocity();
+        } else if (m.isNoteOff()) {
+            if (h) { h = false; --heldNotes; }
+            if (m.getNoteNumber() == note)  // fall back to the highest key still held
+                for (int k = 127; k >= 0; --k) if (held[(size_t) k]) { note = k; break; }
+        }
         else if (m.isAllNotesOff() || m.isAllSoundOff()) { held.fill(false); heldNotes = 0; }
     }
     renderTo(buffer.getNumSamples());

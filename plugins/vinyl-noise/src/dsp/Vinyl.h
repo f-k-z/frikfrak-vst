@@ -11,7 +11,9 @@ namespace dsp {
 class Vinyl {
 public:
     // gate: crackle/hiss only sound while true (MIDI key held); wow/age always process the input.
-    struct Params { float crackle = 0, hiss = 0, wow = 0, age = 0; bool on = true, gate = true; };
+    // pitch: frequency ratio of the noise colour (1 = crackle at 2.5 kHz, hiss at 6 kHz; 2 = one octave up).
+    // level: noise loudness 0..1 (MIDI velocity).
+    struct Params { float crackle = 0, hiss = 0, wow = 0, age = 0; bool on = true, gate = true; float pitch = 1, level = 1; };
 
     void prepare(double sampleRate, uint32_t seed = 0x12345678u) {
         sr = sampleRate;
@@ -25,12 +27,8 @@ public:
         wowPhase = flutterPhase = 0.0f;
         hpR = 1.0f - kTwoPi * 40.0f / (float) sr;
         hissL = hissR = 0.0f;
-        hissA = onePoleCoeff(6000.0f);
-        hissNorm = std::sqrt((2.0f - hissA) / hissA) / std::sqrt(1.0f / 3.0f);  // post-LP RMS = 1
-        // crackle resonator: RBJ band-pass ~2.5 kHz, Q 1.5
-        const float w = kTwoPi * 2500.0f / (float) sr, alpha = std::sin(w) / (2.0f * 1.5f);
-        const float a0 = 1.0f + alpha;
-        bb0 = alpha / a0; bb2 = -alpha / a0; ba1 = -2.0f * std::cos(w) / a0; ba2 = (1.0f - alpha) / a0;
+        pitch = -1.0f;
+        setPitch(1.0f);
         cx1 = cx2 = cy1 = cy2 = 0.0f;
         for (int c = 0; c < 2; ++c) { hpX[c] = hpY[c] = lp1[c] = lp2[c] = 0.0f; }
         wowS.prepare(sr, 0.0f, 0.05f);
@@ -62,7 +60,8 @@ public:
         wowPhase = wrap(wowPhase + kTwoPi * kWowHz / (float) sr);
         flutterPhase = wrap(flutterPhase + kTwoPi * kFlutterHz / (float) sr);
 
-        const float target = p.gate ? 1.0f : 0.0f;
+        if (std::fabs(p.pitch - pitch) > 1e-6f) setPitch(p.pitch);  // recompute only on note change
+        const float target = p.gate ? p.level : 0.0f;
         noiseEnv += (target > noiseEnv ? envAtk : envRel) * (target - noiseEnv);
 
         // Crackle: Poisson clicks, occasional loud pop, through a resonator. Centered (mono).
@@ -99,6 +98,17 @@ public:
 private:
     static constexpr float kWowHz = 0.5f, kFlutterHz = 8.0f, kHissRms = 0.0017783f;  // -55 dBFS
 
+    // Noise colour follows the played note: hiss low-pass and crackle resonator move together.
+    void setPitch(float ratio) {
+        pitch = ratio;
+        hissA = onePoleCoeff(std::clamp(6000.0f * ratio, 400.0f, 0.45f * (float) sr));
+        hissNorm = std::sqrt((2.0f - hissA) / hissA) / std::sqrt(1.0f / 3.0f);  // post-LP RMS = 1 at any pitch
+        // crackle resonator: RBJ band-pass, Q 1.5, 0 dB peak
+        const float w = kTwoPi * std::clamp(2500.0f * ratio, 150.0f, 0.4f * (float) sr) / (float) sr, alpha = std::sin(w) / (2.0f * 1.5f);
+        const float a0 = 1.0f + alpha;
+        bb0 = alpha / a0; bb2 = -alpha / a0; ba1 = -2.0f * std::cos(w) / a0; ba2 = (1.0f - alpha) / a0;
+    }
+
     float onePoleCoeff(float fc) const { return 1.0f - std::exp(-kTwoPi * fc / (float) sr); }
     static float wrap(float ph) { return ph >= kTwoPi ? ph - kTwoPi : ph; }
     void advance() { write = (write + 1) & (size - 1); }
@@ -120,7 +130,7 @@ private:
     Smoother wowS, ageS;
     float wowPhase = 0, flutterPhase = 0, hpR = 0.99f, hpX[2] {}, hpY[2] {}, lp1[2] {}, lp2[2] {};
     float hissA = 0.5f, hissNorm = 1.0f, hissL = 0, hissR = 0;
-    float noiseEnv = 0, envAtk = 1, envRel = 1;
+    float noiseEnv = 0, envAtk = 1, envRel = 1, pitch = 1;
     float bb0 = 0, bb2 = 0, ba1 = 0, ba2 = 0, cx1 = 0, cx2 = 0, cy1 = 0, cy2 = 0;
 };
 

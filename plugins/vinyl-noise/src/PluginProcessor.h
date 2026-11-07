@@ -37,7 +37,8 @@ private:
 
     dsp::Vinyl vinyl;
     std::array<bool, 128> held {};
-    int heldNotes = 0;
+    int heldNotes = 0, note = 60;
+    float velocity = 1.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(VinylNoiseProcessor)
 };

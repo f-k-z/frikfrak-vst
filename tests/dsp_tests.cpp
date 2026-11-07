@@ -204,6 +204,22 @@ static void testVinyl() {
     };
     CHECK(hissAt(1) < 0.7 * hissAt(0), "age does not darken noise: %g vs %g", hissAt(1), hissAt(0));
 
+    // Note follows pitch: one octave up = brighter noise; velocity scales loudness
+    auto noiseAt = [&](float pitch, float level, double* rmsOut) {
+        v.prepare(sr, 11);
+        dsp::Vinyl::Params np; np.hiss = np.crackle = 1; np.pitch = pitch; np.level = level;
+        auto o = runVinyl(v, np, Buf((size_t) sr, 0.0f));
+        if (rmsOut) *rmsOut = rms(o, 4800, o.size() - 4800);
+        Buf d(o.size() - 1); for (size_t i = 1; i < o.size(); ++i) d[i - 1] = o[i] - o[i - 1];
+        return rms(d, 4800, d.size() - 4800) / rms(o, 4800, o.size() - 4800);  // treble/total ~ brightness
+    };
+    const double lowB = noiseAt(0.25f, 1, nullptr), midB = noiseAt(1, 1, nullptr), highB = noiseAt(2, 1, nullptr);
+    CHECK(lowB < midB && midB < highB, "pitch does not track: %g %g %g", lowB, midB, highB);
+    double loud = 0, soft = 0;
+    noiseAt(1, 1, &loud); noiseAt(1, 0.5f, &soft);
+    CHECK(std::fabs(20 * std::log10(soft / loud) + 6) < 1.5, "velocity 0.5 not ~-6 dB: %.1f", 20 * std::log10(soft / loud));
+    CHECK(finiteAndBounded(runVinyl(v, { 1, 1, 0, 0, true, true, 16.0f, 1 }, Buf((size_t) sr, 0.0f)), 2.0f), "extreme pitch unbounded");
+
     // Everything maxed on a full-scale input: finite and bounded
     v.prepare(sr, 3);
     dsp::Vinyl::Params mx; mx.crackle = mx.hiss = mx.wow = mx.age = 1;

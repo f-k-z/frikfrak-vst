@@ -77,7 +77,11 @@ Presets (menu en haut à droite de l'interface, aussi dans la liste de programme
 | Hiss | Souffle |
 | Age | Assombrit le bruit (16 kHz → 6 kHz) |
 
-Les craquements et le souffle ne sonnent que tant qu'une touche est enfoncée (attaque 5 ms, extinction ~150 ms au relâchement). La note jouée n'a pas d'importance.
+Les craquements et le souffle ne sonnent que tant qu'une touche est enfoncée (attaque 5 ms, extinction ~150 ms au relâchement).
+
+- **Note** : hauteur du bruit. Do central (C4) = son de référence ; une octave plus haut = craquements et souffle deux fois plus aigus, une octave plus bas = disque plus sourd.
+- **Vélocité** : volume du vinyle.
+- Plusieurs touches tenues : la dernière jouée donne la hauteur.
 
 ## Validation
 
