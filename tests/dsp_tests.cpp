@@ -9,6 +9,8 @@
 #include "dsp/Pads.h"
 #include "dsp/TimeFx.h"
 #include "dsp/ColorFx.h"
+#include "dsp/ThrowFx.h"
+#include "dsp/Chain.h"
 #include "Presets.h"
 #include "../plugins/kankyo/src/Presets.h"
 #include <set>
@@ -693,6 +695,75 @@ static void testGlitchColor() {
     }
 }
 
+// ---------- Glitch: throw effects and full chain ----------
+
+static size_t peakAt(const Buf& x, size_t from, size_t to) { size_t a = from; for (size_t i = from; i < to; ++i) if (std::fabs(x[i]) > std::fabs(x[a])) a = i; return a; }
+
+static void testGlitchThrowAndChain() {
+    const double sr = 48000;
+    {   // Echo 1/4 at 120 BPM: repeats every 24000 samples, decaying, and keep going after release
+        dsp::Echo e; e.prepare(sr);
+        Buf in((size_t) (4 * sr), 0.0f); in[1000] = 1.0f; in[(size_t) (2.6 * sr)] = 1.0f;  // second impulse after release
+        const Buf out = runClocked(sr, 120, true, in, [&](float& l, float& r, auto& c, double, size_t i) { e.process(l, r, i < 2000, 1.0, 0.6f, c); });
+        const size_t p1 = peakAt(out, 2000, 30000), p2 = peakAt(out, 30000, 54000), p3 = peakAt(out, 54000, 78000);
+        CHECK(p1 == 25000, "first repeat at %zu", p1);
+        CHECK(std::abs((long) p2 - 49000) <= 4 && std::abs((long) p3 - 73000) <= 8, "repeats at %zu, %zu", p2, p3);
+        CHECK(std::fabs(out[p2]) < std::fabs(out[p1]) && std::fabs(out[p3]) < std::fabs(out[p2]), "repeats not decaying");
+        const size_t late = (size_t) (2.6 * sr);  // sent after release: no repeat of it
+        CHECK(std::fabs(out[late + 24000]) < 0.01f, "post-release send repeated (%.3f)", out[late + 24000]);
+    }
+    {   // 20 ms taps: the first repeat / the reverb tail still come out (no premature bypass)
+        dsp::Echo e; e.prepare(sr);
+        Buf in((size_t) (2 * sr), 0.0f); in[1500] = 1.0f;  // after the 8 ms send ramp of a tap starting at 1000
+        const Buf out = runClocked(sr, 120, true, in, [&](float& l, float& r, auto& c, double, size_t i) { e.process(l, r, i >= 1000 && i < 1960, 2.0, 0.5f, c); });
+        CHECK(std::fabs(out[49500]) > 0.5f, "20 ms echo tap lost its repeat (%.3f)", out[49500]);
+        dsp::ReverbThrow rv; rv.prepare(sr);
+        const Buf tap = runPlain(in, [&](float& l, float& r, size_t i) { rv.process(l, r, i >= 1000 && i < 1960, 0.6f); });
+        CHECK(rms(tap, (size_t) (0.5 * sr), (size_t) (0.5 * sr)) > 1e-4, "20 ms reverb tap lost its tail");
+    }
+    {   // Reverb on noise for 0.5 s: tail 1 s after release, then exact bypass once below -90 dBFS
+        dsp::ReverbThrow rv; rv.prepare(sr);
+        const Buf in = noise((size_t) (15 * sr), 5);
+        Buf dryAfter = in;
+        const Buf out = runPlain(in, [&](float& l, float& r, size_t i) { rv.process(l, r, i < (size_t) (0.5 * sr), 0.3f); });
+        double tail = 0; for (size_t i = (size_t) (1.5 * sr); i < (size_t) (1.6 * sr); ++i) tail += std::fabs(out[i] - in[i]);
+        CHECK(tail > 0, "no reverb tail after release");
+        bool exact = true; for (size_t i = (size_t) (14 * sr); i < out.size(); ++i) exact = exact && out[i] == in[i];
+        CHECK(exact && rv.idle(), "reverb never returned to exact bypass");
+    }
+    {   // Echo feedback 95 % for 30 s: finite, bounded, energy falls once the send closes
+        dsp::Echo e; e.prepare(sr);
+        const Buf in = noise((size_t) (30 * sr), 9);
+        const Buf out = runClocked(sr, 120, true, in, [&](float& l, float& r, auto& c, double, size_t i) { e.process(l, r, i < (size_t) (10 * sr), 0.5, 0.95f, c); });
+        Buf wet(out.size()); for (size_t i = 0; i < out.size(); ++i) wet[i] = out[i] - in[i];
+        CHECK(finiteAndBounded(wet, 30.0f), "echo 95 %% feedback unbounded");
+        CHECK(rms(wet, (size_t) (28 * sr), (size_t) sr) < rms(wet, (size_t) (11 * sr), (size_t) sr), "echo tail not decaying");
+    }
+    {   // Chain: no pad = bit-exact; every pad on loud noise = finite and under the ceiling; mid-block engage = no click
+        const Buf in = noise((size_t) (10 * sr), 13);
+        dsp::GlitchChain ch; ch.prepare(sr);
+        dsp::GlitchSettings st;
+        dsp::GlitchChain::Active none {}, all; all.fill(true);
+        Buf out = runClocked(sr, 120, true, in, [&](float& l, float& r, auto& c, double ppq, size_t) { ch.process(l, r, none, st, c, ppq); });
+        CHECK(out == in && ch.idle(), "chain with no pad not bit-exact");
+        st.pitchSemis = 7; st.filterFreq = 0.8f; st.echoFeedback = 0.95f; st.downerDepth = 1;
+        out = runClocked(sr, 140, true, in, [&](float& l, float& r, auto& c, double ppq, size_t) { ch.process(l, r, all, st, c, ppq); });
+        CHECK(finiteAndBounded(out, 1.0f), "all pads: output over the ceiling");
+        dsp::GlitchChain c2; c2.prepare(sr);
+        const Buf sn = sine(sr, 220, 2.0, 0.5f);
+        for (int fx = 0; fx < dsp::GlitchChain::kFx; ++fx) {
+            dsp::GlitchChain c3; c3.prepare(sr);
+            dsp::GlitchSettings s3;
+            if (fx == dsp::GlitchChain::Crush) { s3.crushBits = 16; s3.crushRateKHz = 48; }  // its steps are the effect, not a click
+            const Buf o = runClocked(sr, 120, true, sn, [&](float& l, float& r, auto& c, double ppq, size_t i) {
+                dsp::GlitchChain::Active a {}; a[(size_t) fx] = i >= 30123 && i < 70321;  // engage and release mid-block
+                c3.process(l, r, a, s3, c, ppq);
+            });
+            CHECK(maxStep(o, 0, o.size()) <= 1.25 * maxStep(sn, 0, 2000) + 0.01, "fx %d click %.3f", fx, maxStep(o, 0, o.size()));
+        }
+    }
+}
+
 int main() {
     testTine();
     testEffects();
@@ -704,6 +775,7 @@ int main() {
     testGlitchBasics();
     testGlitchTime();
     testGlitchColor();
+    testGlitchThrowAndChain();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all DSP tests passed\n");
     return 0;
